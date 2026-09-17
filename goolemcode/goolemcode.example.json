@@ -1,0 +1,25 @@
+{
+  "provider": "ollama",
+  "model": "qwen3:30b-a3b",
+  "ollama_url": "http://localhost:11434",
+  "max_tokens": 16000,
+  "effort": "high",
+
+  "rag": {
+    "enabled": false,
+    "base_url": "http://localhost:8003",
+    "user": "you",
+    "n": 5
+  },
+
+  "mcp_servers": [],
+
+  "smart_routing": {
+    "enabled": true,
+    "secondary_provider": "ollama",
+    "secondary_model": "gemma4:31b",
+    "secondary_ollama_url": "",
+    "primary_more_capable": true,
+    "consecutive_fallback": 3
+  }
+}

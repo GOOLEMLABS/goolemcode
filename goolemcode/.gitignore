@@ -1,0 +1,12 @@
+# Binarios compilados
+/goolemcode
+/dist/
+
+# Config local
+goolemcode.json
+
+# Variables de entorno locales
+.env
+
+# Memoria del agente (notas .md de conocimiento): estado local, no se versiona
+.goolem/

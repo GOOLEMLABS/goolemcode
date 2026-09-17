@@ -1,0 +1,16 @@
+# Config local con IP/modelos personales — NO versionar
+# (ejemplo: goolemcode/goolemcode.example.json)
+goolemcode/goolemcode.json
+
+# Binario compilado (ojo: NO ignorar el directorio del módulo)
+/goolemcode/goolemcode
+
+# Artefactos de compilación
+/goolemcode/dist/
+
+# Estado local del agente (sesión/historial/tareas/notas)
+.goolem/
+/goolemcode/.goolem/
+
+# SO
+.DS_Store
