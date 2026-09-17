@@ -451,8 +451,7 @@ Para mejorar la legibilidad, la salida usa códigos ANSI:
 - **Tamaño binario**: ~10MB (statically linked)
 - **Plataformas**: macOS arm64, Linux amd64
 - **Licencia**: MIT
-- **Repositorio público**: https://github.com/GOOLEMLABS/goolemcode
-- **Repositorio privado**: https://github.com/GOOLEMLABS/goolemcode-priv
+- **Repositorio**: https://github.com/GOOLEMLABS/goolemcode (único; el antiguo repo privado se eliminó)
 
 ---
 
