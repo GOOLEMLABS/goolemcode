@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/GOOLEMLABS/goolemcode/internal/model"
+	"github.com/GOOLEMLABS/goolemcode/internal/securefs"
 	"github.com/GOOLEMLABS/goolemcode/internal/tools"
 )
 
@@ -54,11 +55,8 @@ func (s *Store) Load() []Task {
 
 func (s *Store) Save(ts []Task) error {
 	p := s.path()
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		return err
-	}
 	data, _ := json.MarshalIndent(ts, "", "  ")
-	return os.WriteFile(p, data, 0o644)
+	return securefs.WriteFile(p, data)
 }
 
 func mark(status string) string {

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/GOOLEMLABS/goolemcode/internal/model"
+	"github.com/GOOLEMLABS/goolemcode/internal/securefs"
 )
 
 type Store struct {
@@ -28,18 +29,12 @@ func (s *Store) Save(msgs []model.Message) error {
 	if len(msgs) == 0 {
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
-		return err
-	}
 	data, err := json.MarshalIndent(msgs, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path)
+	// 0700/0600: el estado local guarda la conversación (prompts) del usuario.
+	return securefs.WriteFileAtomic(s.path, data)
 }
 
 // Clear borra la sesión guardada (ignora si no existe).

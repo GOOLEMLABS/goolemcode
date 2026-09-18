@@ -1,0 +1,19 @@
+# Actualizaciones de dependencias: PRs automáticos de Dependabot (versiones)
+# además de las alertas de seguridad y los security updates automatizados.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /goolemcode
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"

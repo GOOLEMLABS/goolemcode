@@ -48,6 +48,24 @@ if [ -n "$PATHS" ]; then
   report "rutas locales" "$PATHS"
 fi
 
+# 5. Identidad de los commits: no publicar emails personales.
+#    Permitidos: noreply de GitHub (*@users.noreply.github.com), bots y, si se
+#    define, GUARD_ALLOWED_EMAIL (para colaboradores legítimos).
+BAD_MAIL="$(git log --format='%h %ae %ce' --all 2>/dev/null | sort -u | awk -v allow="${GUARD_ALLOWED_EMAIL:-}" '
+  {
+    bad=""
+    for (i = 2; i <= NF; i++) {
+      e = $i
+      if (e ~ /@users\.noreply\.github\.com$/) continue
+      if (allow != "" && e == allow) continue
+      bad = bad " " e
+    }
+    if (bad != "") print $1 bad
+  }' || true)"
+if [ -n "$BAD_MAIL" ]; then
+  report "emails no-noreply en la identidad de commits (usa <id>+usuario@users.noreply.github.com)" "$BAD_MAIL"
+fi
+
 if [ "$FOUND" -eq 0 ]; then
   echo "✅ GUARDIÁN: árbol limpio ($(printf '%s\n' "$FILES" | wc -l | tr -d ' ') ficheros) — push permitido."
   exit 0

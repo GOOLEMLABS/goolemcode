@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/GOOLEMLABS/goolemcode/internal/mcp"
+	"github.com/GOOLEMLABS/goolemcode/internal/securefs"
 )
 
 type Config struct {
@@ -169,7 +170,8 @@ func (cfg *Config) SaveConfig() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	// 0600: la config local puede incluir cabeceras de MCP con tokens.
+	return securefs.WriteFile(path, data)
 }
 
 // loadConfigFile aplica un goolemcode.json sobre cfg. Devuelve true si lo leyó.

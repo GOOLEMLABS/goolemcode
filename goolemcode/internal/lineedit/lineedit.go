@@ -11,9 +11,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
+	"github.com/GOOLEMLABS/goolemcode/internal/securefs"
 	"golang.org/x/term"
 )
 
@@ -357,10 +357,7 @@ func (e *Editor) appendHistoryFile(line string) {
 	if e.histFile == "" {
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(e.histFile), 0o755); err != nil {
-		return
-	}
-	f, err := os.OpenFile(e.histFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := securefs.OpenAppend(e.histFile)
 	if err != nil {
 		return
 	}

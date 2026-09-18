@@ -2,15 +2,49 @@
 # (ejemplo: goolemcode/goolemcode.example.json)
 goolemcode/goolemcode.json
 
+# Variables de entorno locales (claves API)
+.env
+.env.*
+!.env.example
+!**/.env.example
+
 # Binario compilado (ojo: NO ignorar el directorio del módulo)
 /goolemcode/goolemcode
 
 # Artefactos de compilación
+/dist/
 /goolemcode/dist/
 
-# Estado local del agente (sesión/historial/tareas/notas)
+# --- Estado local del agente: NO versionar nunca ---------------------------
+# `.goolem/` guarda la sesión, la HISTORIA de conversación/prompts, las tareas,
+# las notas de conocimiento y los hooks/commands locales. Contiene datos
+# personales del entorno (IPs privadas, rutas locales del usuario) que no deben
+# acabar en un repo público.
 .goolem/
 /goolemcode/.goolem/
+.goolem/history
+.goolem/session.json
+.goolem/tasks.json
+.goolem/knowledge/
+.goolem/commands/
+.goolem/hooks.json
+.goolem/scripts/
+/goolemcode/.goolem/history
+/goolemcode/.goolem/session.json
+/goolemcode/.goolem/tasks.json
+/goolemcode/.goolem/knowledge/
+/goolemcode/.goolem/commands/
+/goolemcode/.goolem/hooks.json
+
+# Archivos de historia/estado exportados (bundles de git, copias comprimidas):
+# contienen la historia antigua con datos personales y nunca se publican.
+*.bundle
+*.tar.gz
+*.tar.bz2
+*.tgz
+/archive/
+/goolem-archive/
 
 # SO
 .DS_Store
+._*

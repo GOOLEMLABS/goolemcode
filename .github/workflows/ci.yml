@@ -6,13 +6,20 @@ on:
   pull_request:
     branches: [main]
 
+# Permisos mínimos: el workflow solo lee el repo.
+permissions:
+  contents: read
+
 jobs:
   check:
     name: vet + test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      # Acciones fijadas a SHA completo (supply-chain hardening / sha_pinning_required).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: '1.25'
           cache: true

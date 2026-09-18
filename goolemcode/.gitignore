@@ -7,6 +7,25 @@ goolemcode.json
 
 # Variables de entorno locales
 .env
+.env.*
+!.env.example
 
-# Memoria del agente (notas .md de conocimiento): estado local, no se versiona
+# Estado local del agente: sesión, HISTORIA de conversación/prompts, tareas y
+# notas .md de conocimiento. No se versiona (datos personales del entorno).
 .goolem/
+.goolem/history
+.goolem/session.json
+.goolem/tasks.json
+.goolem/knowledge/
+.goolem/commands/
+.goolem/hooks.json
+.goolem/scripts/
+
+# Archivos de historia/estado exportados (bundles de git, copias comprimidas)
+*.bundle
+*.tar.gz
+*.tgz
+
+# SO
+.DS_Store
+._*

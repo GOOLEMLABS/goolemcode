@@ -33,6 +33,7 @@ import (
 	"github.com/GOOLEMLABS/goolemcode/internal/provider"
 	"github.com/GOOLEMLABS/goolemcode/internal/rag"
 	"github.com/GOOLEMLABS/goolemcode/internal/scripts"
+	"github.com/GOOLEMLABS/goolemcode/internal/securefs"
 	"github.com/GOOLEMLABS/goolemcode/internal/session"
 	"github.com/GOOLEMLABS/goolemcode/internal/statusline"
 	"github.com/GOOLEMLABS/goolemcode/internal/subagent"
@@ -111,6 +112,14 @@ func main() {
 	tracker := usage.New() // consumo de tokens desglosado por modelo
 	reg := tools.NewRegistry()
 	ws := tools.NewWorkspace(cfg.Workdir) // directorio de trabajo móvil (pilotable con /cd)
+
+	// Endurece los permisos del estado local del agente (0700 en directorios,
+	// 0600 en ficheros): .goolem/ guarda sesión, HISTORIA de conversación,
+	// tareas y notas, que pueden contener datos personales del entorno. Migra
+	// instalaciones antiguas creadas con 0755/0644.
+	securefs.HardenTree(filepath.Join(cfg.Workdir, ".goolem"))
+	securefs.HardenTree(cfg.GlobalKnowledgeDir)
+
 	tools.RegisterLocal(reg, ws)
 	tools.RegisterGrep(reg, ws)
 	tools.RegisterGit(reg, ws)

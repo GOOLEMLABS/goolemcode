@@ -243,7 +243,9 @@ Zero external dependencies (`golang.org/x/sys` + `golang.org/x/term`).
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
+
+Copyright (c) 2026 GOOLEMLABS.
 
 ---
 

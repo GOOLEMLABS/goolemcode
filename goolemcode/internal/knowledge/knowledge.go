@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/GOOLEMLABS/goolemcode/internal/model"
+	"github.com/GOOLEMLABS/goolemcode/internal/securefs"
 	"github.com/GOOLEMLABS/goolemcode/internal/tools"
 )
 
@@ -139,10 +140,7 @@ func (s *Store) Write(name, content string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		return "", err
-	}
-	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+	if err := securefs.WriteFile(p, []byte(content)); err != nil {
 		return "", err
 	}
 	rel, _ := filepath.Rel(s.dir, p)

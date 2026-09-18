@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/GOOLEMLABS/goolemcode/internal/model"
+	"github.com/GOOLEMLABS/goolemcode/internal/securefs"
 	"github.com/GOOLEMLABS/goolemcode/internal/tools"
 )
 
@@ -251,10 +252,7 @@ func RegisterTools(reg *tools.Registry, store *Store) {
 			return "", fmt.Errorf("name and code are required")
 		}
 		path := filepath.Join(store.Dir(), name+".py")
-		if err := os.MkdirAll(store.Dir(), 0o755); err != nil {
-			return "", err
-		}
-		if err := os.WriteFile(path, []byte(code), 0o644); err != nil {
+		if err := securefs.WriteFile(path, []byte(code)); err != nil {
 			return "", err
 		}
 		desc, _ := args["description"].(string)
