@@ -97,54 +97,55 @@ func (s *SmartRouter) Chat(ctx context.Context, messages []model.Message, tools 
 		} else {
 			s.mu.Lock()
 			s.lastLabel = chosen.Label()
+			s.primaryFails = 0 // el secundario respondió: se rompe la racha del primario
 			s.mu.Unlock()
 			return resp, nil
 		}
 	}
 
-	s.mu.Lock()
-	// Error de red/transitorio, no un "no" del modelo: si llevamos varios fallos
-	// seguidos del primario, preguntamos al usuario si quiere pasar al secundario.
-	var proceed bool
-	if chosen == s.primary && s.askUser != nil {
-		s.primaryFails++
-		if s.consecutiveFallback > 0 && s.primaryFails >= s.consecutiveFallback {
-			s.primaryFails = 0
-			proceed = s.askUser(fmt.Sprintf(
-				"El modelo primario (%s) no ha respondido en %d intentos consecutivos. ¿Paso al secundario (%s)?",
-				s.primary.Label(), s.consecutiveFallback, s.secondary.Label()))
-			if proceed {
-				chosen = s.secondary
-				s.secondaryCalls++
-				s.lastLabel = chosen.Label()
-				s.mu.Unlock()
-				if onDelta != nil {
-					onDelta(fmt.Sprintf("\n[→ %s]\n", chosen.Label()))
-				}
-				return chosen.Chat(ctx, messages, tools, system, onDelta, onThinking)
-			}
-		}
-	} else {
-		// Reset: el primario respondió bien (o no hay flujo de preguntas).
-		s.primaryFails = 0
+	// El aviso "[→ X]" del primario con degradación ya se emitió en el mensaje ⚠️.
+	if onDelta != nil && !degraded {
+		onDelta(fmt.Sprintf("\n[→ %s]\n", chosen.Label()))
 	}
+
+	resp, err := chosen.Chat(ctx, messages, tools, system, onDelta, onThinking)
+
+	// Contadores. Clave: el primario solo "falla" si la llamada devuelve error; un
+	// éxito resetea la racha. Antes se contaba CADA llamada (aunque respondiera
+	// bien), así que el router preguntaba cada N turnos aunque todo funcionara.
+	askSwitch := false
+	askMsg := ""
+	s.mu.Lock()
 	if chosen == s.primary {
 		s.primaryCalls++
 	} else {
 		s.secondaryCalls++
 	}
-	s.lastLabel = chosen.Label()
+	switch {
+	case err == nil:
+		s.primaryFails = 0
+		s.lastLabel = chosen.Label()
+	case chosen == s.primary && s.askUser != nil:
+		s.primaryFails++
+		if s.consecutiveFallback > 0 && s.primaryFails >= s.consecutiveFallback {
+			s.primaryFails = 0
+			askSwitch = true
+			askMsg = fmt.Sprintf(
+				"El modelo primario (%s) no ha respondido en %d intentos consecutivos. ¿Paso al secundario (%s)?",
+				s.primary.Label(), s.consecutiveFallback, s.secondary.Label())
+		}
+	}
 	s.mu.Unlock()
 
-	// El aviso "[→ X]" del primario con degradación ya se emitió en el mensaje ⚠️.
-	if onDelta != nil && !degraded {
-		onDelta(fmt.Sprintf("\n[→ %s]\n", chosen.Label()))
-	}
-	resp, err := chosen.Chat(ctx, messages, tools, system, onDelta, onThinking)
-	if err == nil {
+	if askSwitch && s.askUser(askMsg) {
 		s.mu.Lock()
-		s.lastLabel = chosen.Label()
+		s.secondaryCalls++
+		s.lastLabel = s.secondary.Label()
 		s.mu.Unlock()
+		if onDelta != nil {
+			onDelta(fmt.Sprintf("\n[→ %s]\n", s.secondary.Label()))
+		}
+		return s.secondary.Chat(ctx, messages, tools, system, onDelta, onThinking)
 	}
 	return resp, err
 }

@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/GOOLEMLABS/goolemcode/internal/checkpoint"
+	"github.com/GOOLEMLABS/goolemcode/internal/debug"
 	"github.com/GOOLEMLABS/goolemcode/internal/model"
 	"github.com/GOOLEMLABS/goolemcode/internal/provider"
 	"github.com/GOOLEMLABS/goolemcode/internal/tools"
@@ -126,8 +127,10 @@ func (a *Agent) RunWithImages(ctx context.Context, input string, images []model.
 				h.OnDelta(fmt.Sprintf("\n[contexto: descartadas %d rondas antiguas para no exceder la ventana]\n", dropped))
 			}
 		}
+		debug.Logf("agent step %d: chat (%d msgs)", step, len(a.messages))
 		assistant, err := a.prov.Chat(ctx, a.messages, a.reg.Definitions(), a.systemPromptNow(), h.OnDelta, h.OnThinking)
 		if err != nil {
+			debug.Logf("agent step %d: chat error: %v", step, err)
 			return "", err
 		}
 		if u := assistant.Usage; u != nil {
@@ -143,8 +146,10 @@ func (a *Agent) RunWithImages(ctx context.Context, input string, images []model.
 			return "El modelo rechazó la petición por motivos de seguridad.", nil
 		}
 		if len(assistant.ToolCalls) == 0 {
+			debug.Logf("agent step %d: final answer", step)
 			return last, nil
 		}
+		debug.Logf("agent step %d: %d tool call(s)", step, len(assistant.ToolCalls))
 
 		results := make([]model.ToolResult, 0, len(assistant.ToolCalls))
 

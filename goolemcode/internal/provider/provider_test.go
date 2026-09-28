@@ -1,12 +1,114 @@
 package provider
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/GOOLEMLABS/goolemcode/internal/model"
 )
+
+// fakeProvider devuelve respuestas/errores preprogramados por llamada.
+type fakeProvider struct {
+	label   string
+	replies []model.Message
+	errs    []error
+	calls   int
+}
+
+func (f *fakeProvider) Label() string { return f.label }
+
+func (f *fakeProvider) Chat(_ context.Context, _ []model.Message, _ []model.ToolDefinition, _ string, onDelta, _ DeltaFunc) (model.Message, error) {
+	i := f.calls
+	f.calls++
+	if i < len(f.errs) && f.errs[i] != nil {
+		return model.Message{}, f.errs[i]
+	}
+	if i < len(f.replies) {
+		return f.replies[i], nil
+	}
+	if onDelta != nil {
+		onDelta("ok")
+	}
+	return model.Message{Role: model.RoleAssistant, Content: "ok"}, nil
+}
+
+// Regresión: el primario NO debe contar como fallo cuando responde bien. Antes
+// se contaba cada llamada y el router preguntaba cada N turnos aunque todo fuera
+// bien.
+func TestSmartRouterDoesNotAskOnSuccess(t *testing.T) {
+	primary := &fakeProvider{label: "primary"}
+	secondary := &fakeProvider{label: "secondary"}
+	r := NewSmartRouter(primary, secondary, false) // tareas simples → primario
+	r.SetConsecutiveFallback(3)
+	asked := 0
+	r.SetAskUser(func(string) bool { asked++; return false })
+
+	msgs := []model.Message{{Role: model.RoleUser, Content: "hola"}}
+	for i := 0; i < 5; i++ {
+		if _, err := r.Chat(context.Background(), msgs, nil, "", nil, nil); err != nil {
+			t.Fatalf("Chat %d: %v", i, err)
+		}
+	}
+	if asked != 0 {
+		t.Fatalf("no debía preguntar con el primario respondiendo bien (preguntó %d veces)", asked)
+	}
+	if primary.calls != 5 {
+		t.Fatalf("el primario debía usarse 5 veces, fue %d", primary.calls)
+	}
+}
+
+// Tras 3 fallos CONSECUTIVOS reales del primario, pregunta una vez; si acepta,
+// usa el secundario.
+func TestSmartRouterAsksAfterConsecutiveFailures(t *testing.T) {
+	primary := &fakeProvider{label: "primary", errs: []error{
+		errors.New("boom"), errors.New("boom"), errors.New("boom"),
+	}}
+	secondary := &fakeProvider{label: "secondary"}
+	r := NewSmartRouter(primary, secondary, false)
+	r.SetConsecutiveFallback(3)
+	asked := 0
+	r.SetAskUser(func(string) bool { asked++; return true })
+
+	msgs := []model.Message{{Role: model.RoleUser, Content: "hola"}}
+	_, _ = r.Chat(context.Background(), msgs, nil, "", nil, nil)
+	_, _ = r.Chat(context.Background(), msgs, nil, "", nil, nil)
+	resp, err := r.Chat(context.Background(), msgs, nil, "", nil, nil) // 3er fallo → pregunta
+	if err != nil {
+		t.Fatalf("la 3ª debía resolverse con el secundario: %v", err)
+	}
+	if asked != 1 {
+		t.Fatalf("debía preguntar exactamente 1 vez, preguntó %d", asked)
+	}
+	if secondary.calls != 1 {
+		t.Fatalf("debía usar el secundario 1 vez, fue %d", secondary.calls)
+	}
+	if resp.Content != "ok" {
+		t.Fatalf("respuesta inesperada: %+v", resp)
+	}
+}
+
+// Un éxito intermedio resetea la racha de fallos del primario.
+func TestSmartRouterSuccessResetsFailureStreak(t *testing.T) {
+	primary := &fakeProvider{label: "primary", errs: []error{
+		errors.New("boom"), nil, errors.New("boom"), errors.New("boom"),
+	}}
+	secondary := &fakeProvider{label: "secondary"}
+	r := NewSmartRouter(primary, secondary, false)
+	r.SetConsecutiveFallback(3)
+	asked := 0
+	r.SetAskUser(func(string) bool { asked++; return true })
+
+	msgs := []model.Message{{Role: model.RoleUser, Content: "hola"}}
+	for i := 0; i < 4; i++ {
+		_, _ = r.Chat(context.Background(), msgs, nil, "", nil, nil)
+	}
+	if asked != 0 {
+		t.Fatalf("un éxito intermedio debe resetear la racha (preguntó %d veces)", asked)
+	}
+}
 
 // El turno del asistente con tool_calls debe serializar content:null (no ""),
 // que es lo que exige la API OpenAI de DeepSeek.

@@ -5,6 +5,8 @@
   "max_tokens": 16000,
   "effort": "high",
 
+  "debug": false,
+
   "rag": {
     "enabled": false,
     "base_url": "http://localhost:8003",

@@ -35,6 +35,8 @@ type Config struct {
 	OnboardingDone     bool               `json:"onboarding_done"`    // si ya pasó por el onboarding
 	SmartRouting       SmartRoutingConfig `json:"smart_routing"`
 
+	Debug bool `json:"debug"` // modo depuración: log en .goolem/debug.log + volcado de goroutines con SIGUSR1
+
 	Workdir     string `json:"-"`
 	AutoApprove bool   `json:"-"`
 	Resume      bool   `json:"-"`
@@ -68,6 +70,7 @@ func Load() Config {
 	workdirFlag := flag.String("workdir", "", "directorio de trabajo (por defecto el actual)")
 	auto := flag.Bool("auto-approve", false, "no pedir confirmación antes de escribir/ejecutar")
 	resume := flag.Bool("resume", false, "reanudar la conversación guardada del directorio de trabajo")
+	debugFlag := flag.Bool("debug", false, "modo depuración: registra hitos en .goolem/debug.log y vuelca goroutines con SIGUSR1")
 	flag.Parse()
 
 	workdir := *workdirFlag
@@ -108,6 +111,7 @@ func Load() Config {
 	cfg.Workdir = workdir
 	cfg.AutoApprove = *auto
 	cfg.Resume = *resume
+	cfg.Debug = cfg.Debug || *debugFlag // el flag activa; el JSON puede dejarlo activo por defecto
 	providerOverridden := *providerFlag != ""
 	if providerOverridden {
 		cfg.Provider = *providerFlag

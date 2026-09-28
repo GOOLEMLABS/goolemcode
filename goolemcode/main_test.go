@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,31 @@ import (
 
 	"github.com/GOOLEMLABS/goolemcode/internal/tools"
 )
+
+// Regresión: el menú debe respetar la tecla del usuario y no auto-denegar.
+// Antes, el goroutine del timeout competía por el canal y le robaba la tecla;
+// además, si no respondías en 15 s, asumía "No".
+func TestChoosePermissionReadsChoice(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  int
+	}{
+		{"una pulsacion 1", "1\n", 1},
+		{"always 2", "2\n", 2},
+		{"texto no", "no\n", 0},
+		{"enter", "\n", 0},
+		{"ctrl-c", "\x03\n", 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			in := bufio.NewReader(strings.NewReader(tc.input))
+			if got := choosePermission("write_file", "x", in); got != tc.want {
+				t.Fatalf("input %q: se obtuvo %d, se esperaba %d", tc.input, got, tc.want)
+			}
+		})
+	}
+}
 
 func TestExpandMentionsInlinesFile(t *testing.T) {
 	dir := t.TempDir()

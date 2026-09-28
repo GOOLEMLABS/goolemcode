@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/GOOLEMLABS/goolemcode/internal/debug"
 )
 
 // transientStatuses son códigos que suelen ser temporales: reintentar ayuda.
@@ -44,12 +46,14 @@ func doWithRetry(ctx context.Context, client *http.Client, method, url string, h
 		resp, err := client.Do(req)
 		if err != nil {
 			lastErr = err
+			debug.Logf("retry %d/%d %s %s: network error: %v", attempt+1, attempts, method, url, err)
 			continue // error de red: reintenta
 		}
 		if transientStatuses[resp.StatusCode] {
 			b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 			resp.Body.Close()
 			lastErr = fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(b))
+			debug.Logf("retry %d/%d %s %s: HTTP %d", attempt+1, attempts, method, url, resp.StatusCode)
 			continue // estado transitorio: reintenta
 		}
 		return resp, nil // éxito o error no transitorio (lo maneja el llamante)

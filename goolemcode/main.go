@@ -22,6 +22,7 @@ import (
 	"github.com/GOOLEMLABS/goolemcode/internal/commands"
 	"github.com/GOOLEMLABS/goolemcode/internal/config"
 	"github.com/GOOLEMLABS/goolemcode/internal/consensus"
+	"github.com/GOOLEMLABS/goolemcode/internal/debug"
 	"github.com/GOOLEMLABS/goolemcode/internal/diff"
 	"github.com/GOOLEMLABS/goolemcode/internal/hooks"
 	"github.com/GOOLEMLABS/goolemcode/internal/interrupt"
@@ -47,6 +48,17 @@ var globalScriptStore *scripts.Store
 func main() {
 	cfg := config.Load()
 	ctx := context.Background()
+
+	if cfg.Debug {
+		if err := debug.Enable(cfg.Workdir); err != nil {
+			fmt.Fprintf(os.Stderr, "(warning: could not enable debug log: %v)\n", err)
+		} else {
+			debugPath := filepath.Join(cfg.Workdir, ".goolem", "debug.log")
+			fmt.Printf("Debug mode ON → %s\n", debugPath)
+			fmt.Println("  (frozen? run: kill -USR1 " + fmt.Sprint(os.Getpid()) + " to dump goroutines to the log)")
+			debug.Logf("startup provider=%s model=%s workdir=%s", cfg.Provider, cfg.Model, cfg.Workdir)
+		}
+	}
 
 	var prov provider.Provider
 	switch cfg.Provider {
@@ -193,11 +205,13 @@ func main() {
 	if r, ok := prov.(*provider.SmartRouter); ok {
 		r.SetConsecutiveFallback(cfg.SmartRouting.ConsecutiveFallback)
 		r.SetAskUser(func(msg string) bool {
+			debug.Logf("smart-router askUser: %q", msg)
 			wd.Release()
 			fmt.Printf("\n🤔 %s\n[y/N] ", msg)
 			line, err := in.ReadString('\n')
 			ans := strings.TrimSpace(line)
 			wd.Acquire(func() {})
+			debug.Logf("smart-router askUser answer=%q", ans)
 			if err != nil {
 				return false
 			}
@@ -219,9 +233,11 @@ func main() {
 		Mutating: false,
 	}, func(_ context.Context, args map[string]any) (string, error) {
 		q, _ := args["question"].(string)
+		debug.Logf("ask_user: %q", q)
 		// Mientras el agente lee (runTurn), el watchdog es el lector en modo raw.
 		// Liberamos stdin para poder leer la respuesta del usuario con Enter.
 		release := wd.Release()
+		debug.Logf("ask_user: watchdog released=%v", release)
 		fmt.Printf("\n🤔 %s\n» ", q)
 		// ask_user requiere texto libre: lectura de línea normal con Enter.
 		line, err := in.ReadString('\n')
@@ -235,6 +251,7 @@ func main() {
 		if release {
 			wd.Acquire(askCancel)
 		}
+		debug.Logf("ask_user: answer=%q", short(ans))
 		if ans == "" {
 			return "(the user did not respond)", nil
 		}
@@ -249,19 +266,23 @@ func main() {
 	permit := func(toolName string, args map[string]any) bool {
 		if planMode { // en modo plan nada muta, ni con --auto-approve
 			b, _ := json.Marshal(args)
+			debug.Logf("permit: plan mode blocked %s(%s)", toolName, short(string(b)))
 			fmt.Printf("⛔ plan mode: blocked %s(%s). Exit /plan to execute.\n", toolName, short(string(b)))
 			return false
 		}
 		if cfg.AutoApprove || approved[toolName] {
+			debug.Logf("permit: auto-approved %s", toolName)
 			return true
 		}
 		// A mitad de turno el watchdog es el único lector de stdin (modo raw).
 		// Hay que Release() antes de leer la tecla y Acquire() al terminar; en otro
 		// caso la tecla la consume el watchdog y el menú nunca recibe la respuesta.
 		released := wd.Release()
+		debug.Logf("permit: asking %s (watchdog released=%v)", toolName, released)
 		previewChange(ws, toolName, args) // diff en color para write_file/edit_file
 		b, _ := json.Marshal(args)
-		allow := choosePermission(toolName, short(string(b)), in, released, askCancel, wd)
+		allow := choosePermission(toolName, short(string(b)), in)
+		debug.Logf("permit: %s -> choice=%d", toolName, allow)
 		if released {
 			wd.Acquire(askCancel) // retoma la vigilia (no-op si el watchdog ya no estaba activo)
 		}
@@ -618,6 +639,7 @@ func main() {
 			}
 			runTurnInterruptible(ctx, wd, ag, expanded, images, tracker, prov.Label(), &showThinking, &askCancel)
 			if err := sess.Save(ag.Snapshot()); err != nil {
+				debug.Logf("session save error: %v", err)
 				fmt.Fprintf(os.Stderr, "(warning: could not save session: %v)\n", err)
 			}
 		}
@@ -626,60 +648,43 @@ func main() {
 
 // choosePermission muestra el menú de confirmación de permisos y devuelve la
 // elección: 1 = Yes (once), 2 = Always (esta herramienta en esta sesión),
-// 0 = No (por defecto si no se pulsa 1 o 2).
+// 0 = No.
 //
 // Permite elegir con una sola pulsación (sin Enter) y también escribiendo el
 // número seguido de Enter. El watchdog de interrupción del turno ya debe estar
-// liberado (released=true): al terminar, el llamante hace wd.Acquire. Si released
-// es true y el usuario no responde (EOF), se lanza el "timeout" de 15 s y se
-// asume No.
-func choosePermission(toolName, argsShort string, in *bufio.Reader, released bool, cancel context.CancelFunc, wd *interrupt.Watcher) int {
+// liberado: al terminar, el llamante hace wd.Acquire.
+//
+// IMPORTANTE: espera la respuesta del usuario SIN límite de tiempo. No hay
+// auto-deny por inactividad: una pausa leyendo la herramienta no debe
+// interpretarse como "No". Solo cuentan como No Ctrl-C/Ctrl-D, Enter a secas,
+// EOF o un error de lectura (con aviso explícito).
+func choosePermission(toolName, argsShort string, in *bufio.Reader) int {
 	fmt.Printf("⚠  %s(%s)\n   1) Yes (once)   2) Always   3) No\n   Choose [1/2/3] (default 3): ", toolName, argsShort)
 
-	type res struct {
-		r   rune
-		err error
-	}
-	ch := make(chan res, 1)
-
-	// Salida por timeout a los 15 s sin respuesta: evita quedarse colgado.
-	if released {
-		go func() {
-			t := time.NewTimer(15 * time.Second)
-			defer t.Stop()
-			select {
-			case <-t.C:
-				_ = lineedit.SttySet("min", "0", "time", "0") // desbloquea ReadRune pendiente
-				ch <- res{'\n', nil}
-			case <-ch:
-				return
-			}
-		}()
-	}
-
-	go func() {
-		r, err := lineedit.ReadKey(in)
-		ch <- res{r, err}
-	}()
-
-	got := <-ch
+	r, err := lineedit.ReadKey(in)
 	fmt.Println() // nueva línea tras la tecla
 
-	if got.err != nil {
-		fmt.Println("(sin respuesta del usuario)")
+	if err != nil {
+		if lineedit.IsEOF(err) {
+			fmt.Println("(fin de entrada: asumo No)")
+		} else {
+			fmt.Println("(no se pudo leer la respuesta: asumo No)")
+		}
 		return 0
 	}
 
-	// Si el primer carácter es un dígito o vacío, lo damos por elegido; si no,
-	// esperamos una línea normal (usuario que escribe algo fuera de rango, p. ej. "no").
-	key := got.r
-	if key == '\n' || key == '\r' || key == 0 || (key >= '1' && key <= '9') {
-		return permChoiceFromRune(key)
+	// Ctrl-C (3) / Ctrl-D (4) / Enter a secas / cualquier tecla fuera de rango
+	// que no sea dígito: se decide con la tecla; si es un dígito, directo.
+	if r == 3 || r == 4 || r == '\n' || r == '\r' || r == 0 {
+		return 0
 	}
-	// Reinyecta el carácter ya leído (no podemos devolverlo al reader): con él
-	// reconstruimos la respuesta escribiendo una línea completa.
+	if r >= '1' && r <= '9' {
+		return permChoiceFromRune(r)
+	}
+	// Tecla que no es dígito (p. ej. "no"): espera el resto de la línea y usa su
+	// primer carácter. No podemos devolver la tecla al reader, la reinyectamos.
 	rest, _ := in.ReadString('\n')
-	full := strings.TrimSpace(string(key) + rest)
+	full := strings.TrimSpace(string(r) + rest)
 	if full == "" {
 		return 0
 	}
@@ -706,6 +711,7 @@ func permChoiceFromRune(r rune) int {
 // wd es el coordinador de stdin compartido (lo usan también ask_user y las
 // confirmaciones a mitad de turno, via Release/Acquire).
 func runTurnInterruptible(ctx context.Context, wd *interrupt.Watcher, ag *agent.Agent, input string, images []model.ImageData, tracker *usage.Tracker, provLabel string, showThinking *bool, askCancel *func()) {
+	debug.Logf("turn begin (interruptible) input=%q", short(input))
 	turnCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -724,10 +730,12 @@ func runTurnInterruptible(ctx context.Context, wd *interrupt.Watcher, ag *agent.
 	select {
 	case <-done:
 		wd.Stop()
+		debug.Logf("turn done (interruptible)")
 		if started {
 			fmt.Println("\n[ok]")
 		}
 	case sig := <-sigCh:
+		debug.Logf("turn interrupted by signal %v", sig)
 		cancel()
 		<-done
 		wd.Stop()
@@ -924,6 +932,7 @@ func runTurn(ctx context.Context, ag *agent.Agent, input string, images []model.
 			inThinking = false
 		}
 	}
+	debug.Logf("runTurn input=%q images=%d", short(input), len(images))
 	h := agent.Hooks{
 		OnThinking: func(s string) {
 			if showThinking == nil || !*showThinking {
@@ -942,6 +951,7 @@ func runTurn(ctx context.Context, ag *agent.Agent, input string, images []model.
 		OnToolCall: func(c model.ToolCall) {
 			endThinking()
 			b, _ := json.Marshal(c.Arguments)
+			debug.Logf("tool call %s(%s)", c.Name, short(string(b)))
 			fmt.Printf("\n%s→ %s(%s)%s\n", ansiCyan, c.Name, short(string(b)), ansiReset)
 		},
 		OnToolResult: func(r model.ToolResult) {
@@ -951,14 +961,17 @@ func runTurn(ctx context.Context, ag *agent.Agent, input string, images []model.
 				tag = "✗"
 				color = ansiRed
 			}
+			debug.Logf("tool result error=%v %s", r.IsError, short(strings.ReplaceAll(r.Content, "\n", " ")))
 			fmt.Printf("  %s%s %s%s\n", color, tag, short(strings.ReplaceAll(r.Content, "\n", " ")), ansiReset)
 		},
 	}
 	_, err := ag.RunWithImages(ctx, input, images, h)
 	endThinking()
 	if err != nil && ctx.Err() == nil {
+		debug.Logf("turn error: %v", err)
 		fmt.Printf("\n%sError: %v%s\n", ansiRed, err, ansiReset)
 	}
+	debug.Logf("runTurn end err=%v ctxErr=%v", err, ctx.Err())
 	if u := ag.TurnUsage(); u.InputTokens > 0 || u.OutputTokens > 0 {
 		activeLabel := provLabel
 		if p := ag.Provider(); p != nil {
@@ -1360,7 +1373,10 @@ The conversation is saved automatically; start with -resume to continue it.
 Use ↑/↓ to navigate message history (←/→ and backspace to edit).
 
 Security: before writing files or executing commands, confirmation is requested
-(1/2/3), unless you start with --auto-approve. Use /rewind if something breaks.`)
+(1/2/3), unless you start with --auto-approve. Use /rewind if something breaks.
+
+Debug: start with -debug (or "debug": true in goolemcode.json) to log milestones
+to .goolem/debug.log. If it freezes, run: kill -USR1 <pid>  (dumps goroutine stacks).`)
 }
 
 // formatSavings muestra el ahorro en formato legible (p. ej. "$0.05" o "$1.23").
