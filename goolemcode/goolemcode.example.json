@@ -6,6 +6,7 @@
   "effort": "high",
 
   "debug": false,
+  "stream_idle_timeout_seconds": 120,
 
   "rag": {
     "enabled": false,

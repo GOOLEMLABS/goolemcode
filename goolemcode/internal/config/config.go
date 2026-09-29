@@ -37,6 +37,10 @@ type Config struct {
 
 	Debug bool `json:"debug"` // modo depuración: log en .goolem/debug.log + volcado de goroutines con SIGUSR1
 
+	// StreamIdleTimeoutSeconds aborta la respuesta de un proveedor si pasan estos
+	// segundos sin recibir datos (evita cuelgues por streams estancados).
+	StreamIdleTimeoutSeconds int `json:"stream_idle_timeout_seconds"`
+
 	Workdir     string `json:"-"`
 	AutoApprove bool   `json:"-"`
 	Resume      bool   `json:"-"`
@@ -84,12 +88,13 @@ func Load() Config {
 	loadDotEnv(".env")
 
 	cfg := Config{
-		Provider:       "ollama",
-		OllamaURL:      "http://localhost:11434",
-		MaxTokens:      16000,
-		Effort:         "high",
-		ShowThinking:   true, // por defecto sí; el JSON puede ponerlo en false
-		ShowStatusline: true,
+		Provider:                 "ollama",
+		OllamaURL:                "http://localhost:11434",
+		MaxTokens:                16000,
+		Effort:                   "high",
+		ShowThinking:             true, // por defecto sí; el JSON puede ponerlo en false
+		ShowStatusline:           true,
+		StreamIdleTimeoutSeconds: 120, // aborta si el proveedor no envía datos en 2 min
 		// Smart routing activo por defecto: enruta las tareas simples al modelo
 		// secundario (más barato) y las complejas al primario. Si no quieres
 		// usarlo, pon "smart_routing": { "enabled": false } en goolemcode.json.

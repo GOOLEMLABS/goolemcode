@@ -144,7 +144,9 @@ func (o *Ollama) Chat(ctx context.Context, messages []model.Message, tools []mod
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 		return model.Message{}, fmt.Errorf("ollama HTTP %d: %s", resp.StatusCode, string(b))
 	}
-	return parseOllamaStream(resp.Body, onDelta, onThinking)
+	guard := newStallGuard(resp.Body, resp.Body.Close, StreamIdleTimeout)
+	defer guard.stop()
+	return parseOllamaStream(guard, onDelta, onThinking)
 }
 
 // parseOllamaStream ensambla el Message neutral desde el stream JSON-por-líneas

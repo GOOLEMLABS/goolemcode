@@ -164,7 +164,9 @@ func (d *DeepSeek) Chat(ctx context.Context, messages []model.Message, toolDefs 
 		b, _ := readAllLimited(resp.Body)
 		return model.Message{}, fmt.Errorf("deepseek HTTP %d: %s", resp.StatusCode, b)
 	}
-	return parseDeepSeekStream(resp.Body, onDelta, onThinking)
+	guard := newStallGuard(resp.Body, resp.Body.Close, StreamIdleTimeout)
+	defer guard.stop()
+	return parseDeepSeekStream(guard, onDelta, onThinking)
 }
 
 // parseDeepSeekStream ensambla el Message neutral desde el stream SSE (formato

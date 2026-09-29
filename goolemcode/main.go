@@ -62,6 +62,12 @@ func main() {
 		}
 	}
 
+	// Timeout de inactividad del stream de los proveedores (evita cuelgues por
+	// conexiones estancadas que no envían datos).
+	if cfg.StreamIdleTimeoutSeconds > 0 {
+		provider.StreamIdleTimeout = time.Duration(cfg.StreamIdleTimeoutSeconds) * time.Second
+	}
+
 	var prov provider.Provider
 	switch cfg.Provider {
 	case "claude":

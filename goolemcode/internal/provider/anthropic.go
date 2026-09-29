@@ -89,7 +89,9 @@ func (a *Anthropic) Chat(ctx context.Context, messages []model.Message, tools []
 		b, _ := io.ReadAll(resp.Body)
 		return model.Message{}, fmt.Errorf("anthropic HTTP %d: %s", resp.StatusCode, string(b))
 	}
-	return parseSSE(resp.Body, onDelta, onThinking)
+	guard := newStallGuard(resp.Body, resp.Body.Close, StreamIdleTimeout)
+	defer guard.stop()
+	return parseSSE(guard, onDelta, onThinking)
 }
 
 // toAPIMessages traduce el historial neutral al formato de Anthropic.
