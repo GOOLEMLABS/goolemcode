@@ -24,6 +24,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/GOOLEMLABS/goolemcode/internal/proc"
 )
 
 const (
@@ -130,13 +132,13 @@ func (r *Runner) exec(h compiled, event, name string, args map[string]any, resul
 	ctx, cancel := context.WithTimeout(context.Background(), hookTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "sh", "-c", h.Command)
+	cmd := proc.Command(ctx, "sh", "-c", h.Command)
 	if r.root != nil {
 		cmd.Dir = r.root()
 	}
 	argsJSON, _ := json.Marshal(args)
 	path, _ := args["path"].(string)
-	env := append(os.Environ(),
+	env := append(proc.Env(),
 		"GOOLEM_EVENT="+event,
 		"GOOLEM_TOOL_NAME="+name,
 		"GOOLEM_TOOL_ARGS="+string(argsJSON),

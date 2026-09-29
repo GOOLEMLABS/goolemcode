@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/GOOLEMLABS/goolemcode/internal/model"
+	"github.com/GOOLEMLABS/goolemcode/internal/proc"
 )
 
 const (
@@ -51,7 +52,7 @@ func RegisterSSH(reg *Registry) {
 		cmdCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 		defer cancel()
 
-		cmd := exec.CommandContext(cmdCtx, "ssh", sshArgs...)
+		cmd := proc.Command(cmdCtx, "ssh", sshArgs...)
 		out, err := cmd.CombinedOutput()
 		s := string(out)
 		if len(s) > sshMaxOutput {

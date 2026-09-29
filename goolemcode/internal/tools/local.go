@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/GOOLEMLABS/goolemcode/internal/model"
+	"github.com/GOOLEMLABS/goolemcode/internal/proc"
 )
 
 const (
@@ -260,7 +261,7 @@ func RegisterLocal(reg *Registry, ws *Workspace) {
 		}
 		cmdCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 		defer cancel()
-		cmd := exec.CommandContext(cmdCtx, "sh", "-c", str(args["command"]))
+		cmd := proc.Command(cmdCtx, "sh", "-c", str(args["command"]))
 		cmd.Dir = ws.Root()
 		out, err := cmd.CombinedOutput()
 		s := string(out)

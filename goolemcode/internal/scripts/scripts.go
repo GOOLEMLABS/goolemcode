@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/GOOLEMLABS/goolemcode/internal/model"
+	"github.com/GOOLEMLABS/goolemcode/internal/proc"
 	"github.com/GOOLEMLABS/goolemcode/internal/securefs"
 	"github.com/GOOLEMLABS/goolemcode/internal/tools"
 )
@@ -90,7 +91,7 @@ func (s *Store) Run(ctx context.Context, name string, scriptArgs string, timeout
 	cmdCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(cmdCtx, "python3", sc.Path)
+	cmd := proc.Command(cmdCtx, "python3", sc.Path)
 	if scriptArgs != "" {
 		cmd.Args = append(cmd.Args, strings.Fields(scriptArgs)...)
 	}

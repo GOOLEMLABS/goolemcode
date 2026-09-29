@@ -7,13 +7,14 @@ import (
 	"strings"
 
 	"github.com/GOOLEMLABS/goolemcode/internal/model"
+	"github.com/GOOLEMLABS/goolemcode/internal/proc"
 )
 
 // RegisterGit registers first-class git tools. status/diff/log are read-only;
 // commit is a mutator (goes through checkpoint + confirmation).
 func RegisterGit(reg *Registry, ws *Workspace) {
 	run := func(ctx context.Context, args ...string) (string, error) {
-		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd := proc.Command(ctx, "git", args...)
 		cmd.Dir = ws.Root()
 		out, err := cmd.CombinedOutput()
 		s := strings.TrimRight(string(out), "\n")
@@ -217,7 +218,7 @@ func RegisterGit(reg *Registry, ws *Workspace) {
 		if cmd == "" {
 			return "", fmt.Errorf("command required, e.g. 'pr list' or 'issue create --title \"...\"'")
 		}
-		gh := exec.CommandContext(ctx, "gh", strings.Fields(cmd)...)
+		gh := proc.Command(ctx, "gh", strings.Fields(cmd)...)
 		gh.Dir = ws.Root()
 		out, err := gh.CombinedOutput()
 		s := strings.TrimRight(string(out), "\n")

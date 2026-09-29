@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/GOOLEMLABS/goolemcode/internal/model"
+	"github.com/GOOLEMLABS/goolemcode/internal/proc"
 )
 
 const dockerOutputMax = 30000
@@ -37,7 +38,7 @@ func RegisterDocker(reg *Registry) {
 		cmdCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 		defer cancel()
 
-		cmd := exec.CommandContext(cmdCtx, "docker", "exec", container, "sh", "-c", command)
+		cmd := proc.Command(cmdCtx, "docker", "exec", container, "sh", "-c", command)
 		out, err := cmd.CombinedOutput()
 		s := string(out)
 		if len(s) > dockerOutputMax {
@@ -87,7 +88,7 @@ func RegisterDocker(reg *Registry) {
 		cmdCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
 
-		cmd := exec.CommandContext(cmdCtx, "docker", dockerArgs...)
+		cmd := proc.Command(cmdCtx, "docker", dockerArgs...)
 		out, err := cmd.CombinedOutput()
 		s := string(out)
 		if len(s) > dockerOutputMax {

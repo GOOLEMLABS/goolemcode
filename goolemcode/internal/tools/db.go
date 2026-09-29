@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/GOOLEMLABS/goolemcode/internal/model"
+	"github.com/GOOLEMLABS/goolemcode/internal/proc"
 )
 
 const dbOutputMax = 20000
@@ -42,9 +43,9 @@ func RegisterDB(reg *Registry) {
 		var cmd *exec.Cmd
 		switch dbType {
 		case "sqlite":
-			cmd = exec.CommandContext(cmdCtx, "sqlite3", "-header", "-column", database, query)
+			cmd = proc.Command(cmdCtx, "sqlite3", "-header", "-column", database, query)
 		case "postgres":
-			cmd = exec.CommandContext(cmdCtx, "psql", "-d", database, "-c", query)
+			cmd = proc.Command(cmdCtx, "psql", "-d", database, "-c", query)
 		default:
 			return "", fmt.Errorf("unsupported type: %s (use sqlite or postgres)", dbType)
 		}
