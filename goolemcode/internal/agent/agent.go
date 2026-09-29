@@ -42,6 +42,7 @@ type Hooks struct {
 	OnThinking   func(string) // razonamiento del modelo (qwen3, deepseek-reasoner, Claude)
 	OnToolCall   func(model.ToolCall)
 	OnToolResult func(model.ToolResult)
+	OnUserInput  func(string) // mensaje que el usuario escribió mientras el agente trabajaba
 }
 
 type Agent struct {
@@ -57,6 +58,9 @@ type Agent struct {
 	turnUsage     model.Usage // uso del último turno del usuario (varios pasos)
 	sessionUsage  model.Usage // uso acumulado de la sesión
 	contextBudget int         // presupuesto de tokens del historial (0 = ilimitado)
+	// pending devuelve las líneas que el usuario escribió mientras el agente
+	// trabajaba; se inyectan como mensajes de usuario entre pasos.
+	pending func() []string
 }
 
 // TurnUsage devuelve el consumo de tokens del último turno.
@@ -80,6 +84,12 @@ func (a *Agent) SetContextBudget(tokens int) { a.contextBudget = tokens }
 // SetContextProvider registra una función cuyo texto se añade al system prompt
 // en cada turno (se recalcula, así refleja cambios hechos durante la sesión).
 func (a *Agent) SetContextProvider(fn func() string) { a.contextFn = fn }
+
+// SetPendingInput registra la función que devuelve los mensajes que el usuario
+// escribió mientras el agente trabajaba (y los consume). Se inyectan como
+// mensajes de usuario al inicio de cada paso, de modo que el modelo puede
+// atenderlos sin esperar a que termine el turno.
+func (a *Agent) SetPendingInput(fn func() []string) { a.pending = fn }
 
 // SetProvider cambia el proveedor LLM activo (para /model en caliente). El
 // historial se conserva.
@@ -121,6 +131,17 @@ func (a *Agent) RunWithImages(ctx context.Context, input string, images []model.
 	a.turnUsage = model.Usage{}
 	last := ""
 	for step := 0; step < a.maxSteps; step++ {
+		// Inyecta los mensajes que el usuario escribió mientras el agente
+		// trabajaba, como turnos de usuario, antes del siguiente paso.
+		if a.pending != nil {
+			for _, msg := range a.pending() {
+				debug.Logf("agent step %d: injecting queued user message (%d chars)", step, len(msg))
+				a.messages = append(a.messages, model.Message{Role: model.RoleUser, Content: msg})
+				if h.OnUserInput != nil {
+					h.OnUserInput(msg)
+				}
+			}
+		}
 		if trimmed, dropped := compactHistory(a.messages, a.contextBudget); dropped > 0 {
 			a.messages = trimmed
 			if h.OnDelta != nil {

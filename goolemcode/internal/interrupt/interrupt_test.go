@@ -104,6 +104,46 @@ func TestStopReportsEsc(t *testing.T) {
 	}
 }
 
+// Mientras el turno corre, las líneas tecleadas se capturan (con backspace).
+func TestWatchdogCapturesTypedLine(t *testing.T) {
+	w, pw := newTestWatcher(t)
+	defer pw.Close()
+	lines := make(chan string, 8)
+	w.SetOnLine(func(s string) { lines <- s })
+	startTestWatchdog(t, w, func() {})
+
+	_, _ = pw.Write([]byte("hoX\x7fla\n")) // \x7f = backspace: borra la X
+	select {
+	case got := <-lines:
+		if got != "hola" {
+			t.Fatalf("línea capturada=%q, esperado hola", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no se capturó la línea tecleada")
+	}
+}
+
+// Si el usuario deja texto a medio escribir, no se pierde: se vuelca al parar.
+func TestWatchdogFlushesPartialLineOnStop(t *testing.T) {
+	w, pw := newTestWatcher(t)
+	defer pw.Close()
+	lines := make(chan string, 8)
+	w.SetOnLine(func(s string) { lines <- s })
+	startTestWatchdog(t, w, func() {})
+
+	_, _ = pw.Write([]byte("parcial")) // sin Enter
+	time.Sleep(300 * time.Millisecond)
+	w.Stop()
+	select {
+	case got := <-lines:
+		if got != "parcial" {
+			t.Fatalf("flush al parar=%q, esperado parcial", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no se volcó la línea parcial al parar")
+	}
+}
+
 // Tras Release + Acquire el watchdog debe volver a funcionar y cancelar con ESC.
 func TestReleaseAcquireRestartsWatchdog(t *testing.T) {
 	w, pw := newTestWatcher(t)

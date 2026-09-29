@@ -236,6 +236,32 @@ func TestOllamaStreamEmitsThinking(t *testing.T) {
 	}
 }
 
+// Un mensaje de usuario inyectado a mitad de turno (tras los tool_result, que
+// también son rol "user" en Anthropic) debe fusionarse en el mismo mensaje, no
+// emitirse como dos "user" consecutivos (la API exige roles alternos).
+func TestAnthropicMergesConsecutiveUserMessages(t *testing.T) {
+	msgs := []model.Message{
+		{Role: model.RoleUser, Content: "inicial"},
+		{Role: model.RoleAssistant, ProviderRaw: json.RawMessage(`[{"type":"tool_use","id":"t1","name":"read_file","input":{}}]`)},
+		{Role: model.RoleTool, ToolResults: []model.ToolResult{{CallID: "t1", Content: "ok"}}},
+		{Role: model.RoleUser, Content: "interrupción del usuario"},
+	}
+	out := toAPIMessages(msgs)
+	if len(out) != 3 {
+		t.Fatalf("esperado 3 mensajes (tool_result + texto fusionados), hay %d: %+v", len(out), out)
+	}
+	if out[2]["role"] != "user" {
+		t.Fatalf("el 3º mensaje debe ser user, es %v", out[2]["role"])
+	}
+	blocks, ok := out[2]["content"].([]map[string]any)
+	if !ok || len(blocks) != 2 {
+		t.Fatalf("el mensaje fusionado debe tener 2 bloques (tool_result + text): %+v", out[2]["content"])
+	}
+	if blocks[0]["type"] != "tool_result" || blocks[1]["type"] != "text" || blocks[1]["text"] != "interrupción del usuario" {
+		t.Fatalf("fusión incorrecta: %+v", blocks)
+	}
+}
+
 // Sin tool_calls, el stop_reason es end_turn.
 func TestOllamaStreamPlainText(t *testing.T) {
 	stream := `{"message":{"content":"solo texto"},"done":true,"prompt_eval_count":5,"eval_count":2}`

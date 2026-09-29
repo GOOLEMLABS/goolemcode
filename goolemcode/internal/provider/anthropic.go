@@ -113,9 +113,9 @@ func toAPIMessages(messages []model.Message) []map[string]any {
 				if m.Content != "" {
 					blocks = append(blocks, map[string]any{"type": "text", "text": m.Content})
 				}
-				out = append(out, map[string]any{"role": "user", "content": blocks})
+				out = appendUser(out, blocks)
 			} else {
-				out = append(out, map[string]any{"role": "user", "content": m.Content})
+				out = appendUser(out, m.Content)
 			}
 		case model.RoleAssistant:
 			if len(m.ProviderRaw) > 0 {
@@ -135,10 +135,39 @@ func toAPIMessages(messages []model.Message) []map[string]any {
 					"is_error":    r.IsError,
 				})
 			}
-			out = append(out, map[string]any{"role": "user", "content": blocks})
+			out = appendUser(out, blocks)
 		}
 	}
 	return out
+}
+
+// appendUser añade un mensaje de usuario, fusionándolo con el anterior si ya era
+// de rol "user". La API de Anthropic exige roles alternos: un mensaje de usuario
+// inyectado a mitad de turno (tras los tool_result, que también son "user") debe
+// ir en el mismo bloque, no como mensaje consecutivo.
+func appendUser(out []map[string]any, content any) []map[string]any {
+	if len(out) > 0 && out[len(out)-1]["role"] == "user" {
+		prev := out[len(out)-1]
+		merged := userBlocks(prev["content"])
+		merged = append(merged, userBlocks(content)...)
+		prev["content"] = merged
+		return out
+	}
+	return append(out, map[string]any{"role": "user", "content": content})
+}
+
+// userBlocks normaliza el contenido de un mensaje de usuario a bloques.
+func userBlocks(content any) []map[string]any {
+	switch c := content.(type) {
+	case string:
+		if c == "" {
+			return nil
+		}
+		return []map[string]any{{"type": "text", "text": c}}
+	case []map[string]any:
+		return c
+	}
+	return nil
 }
 
 // --- parsing del stream SSE ---

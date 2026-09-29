@@ -35,6 +35,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/GOOLEMLABS/goolemcode/internal/console"
 	"github.com/GOOLEMLABS/goolemcode/internal/debug"
 	"github.com/GOOLEMLABS/goolemcode/internal/lineedit"
 	"golang.org/x/sys/unix"
@@ -50,6 +51,9 @@ type Watcher struct {
 	fd     int // fd de stdin vigilado (0 = os.Stdin); inyectable en tests
 	// enableRaw activa el modo raw (inyectable en tests, donde no hay TTY).
 	enableRaw func() (func(), error)
+	// onLine recibe cada línea que el usuario escribe durante el turno (Enter).
+	// Si es nil, el texto tecleado se descarta (comportamiento antiguo).
+	onLine func(string)
 }
 
 type watchdogState struct {
@@ -59,7 +63,11 @@ type watchdogState struct {
 	stopR   *os.File // extremo de lectura del pipe de parada (poll)
 	stopW   *os.File // extremo de escritura (Release/Stop lo usan para despertar)
 	sawEsc  bool
+	lineBuf []rune // línea en curso que el usuario teclea durante el turno
 }
+
+// SetOnLine registra el callback que recibe cada línea tecleada durante el turno.
+func (w *Watcher) SetOnLine(fn func(string)) { w.onLine = fn }
 
 // openStopPipe crea el pipe con el que Release/Stop despiertan al poll.
 func (st *watchdogState) openStopPipe() error {
@@ -164,22 +172,75 @@ func (w *Watcher) runLoop(st *watchdogState) {
 	}()
 }
 
-// handleRune lee una runa (solo se llama cuando hay datos disponibles) y decide
-// si debe detener la vigilia. Devuelve true cuando hay que salir del bucle.
+// handleRune lee una runa (solo se llama cuando hay datos disponibles), la
+// procesa como mini-editor de línea (para escribir mientras el agente trabaja) y
+// decide si debe detener la vigilia. Devuelve true cuando hay que salir del bucle.
+//
+// En modo raw el terminal no hace eco, así que lo imprimimos nosotros con un
+// prefijo "» " al empezar la línea. Ctrl-C/ESC interrumpen; Enter entrega la
+// línea por onLine; backspace edita.
 func (w *Watcher) handleRune(st *watchdogState) (stop bool) {
 	r, _, err := w.in.ReadRune()
 	if err != nil {
 		return true
 	}
 	switch r {
-	case 3, 27: // Ctrl-C o ESC → interrumpir el turno
+	case 3: // Ctrl-C → interrumpir el turno
 		st.sawEsc = true
 		if st.cancel != nil {
 			st.cancel()
 		}
 		return true
+	case 27: // ESC: suelta = interrumpir; con secuencia (flechas) = descartar
+		if w.in.Buffered() == 0 {
+			st.sawEsc = true
+			if st.cancel != nil {
+				st.cancel()
+			}
+			return true
+		}
+		w.discardEscape()
+	case '\r', '\n':
+		if len(st.lineBuf) > 0 {
+			line := string(st.lineBuf)
+			st.lineBuf = st.lineBuf[:0]
+			console.Print("\n")
+			if w.onLine != nil {
+				w.onLine(line)
+			}
+		}
+	case 127, 8: // backspace
+		if len(st.lineBuf) > 0 {
+			st.lineBuf = st.lineBuf[:len(st.lineBuf)-1]
+			console.Print("\b \b")
+		}
+	default:
+		if r >= 32 { // imprimible
+			if len(st.lineBuf) == 0 {
+				console.Print("\n» ")
+			}
+			st.lineBuf = append(st.lineBuf, r)
+			console.Print(string(r))
+		}
 	}
 	return false
+}
+
+// discardEscape consume el resto de una secuencia de escape (p. ej. una flecha
+// ESC [ A) para no confundirla con una ESC suelta que interrumpiría el turno.
+func (w *Watcher) discardEscape() {
+	for i := 0; i < 6; i++ {
+		if w.in.Buffered() == 0 {
+			return
+		}
+		r, _, err := w.in.ReadRune()
+		if err != nil {
+			return
+		}
+		if r >= '@' && r <= '~' { // byte final de una secuencia CSI
+			return
+		}
+	}
 }
 
 func (w *Watcher) isActive(st *watchdogState) bool {
@@ -203,6 +264,15 @@ func (w *Watcher) Stop() bool {
 	w.mu.Unlock()
 
 	w.stopAndWait(st)
+	// Si el usuario dejó texto a medio escribir al acabar el turno, no se pierde:
+	// se entrega como línea encolada para que el REPL la procese.
+	if len(st.lineBuf) > 0 {
+		console.Print("\n")
+		if w.onLine != nil {
+			w.onLine(string(st.lineBuf))
+		}
+		st.lineBuf = st.lineBuf[:0]
+	}
 	debug.Logf("watchdog stop sawEsc=%v", st.sawEsc)
 	return st.sawEsc
 }

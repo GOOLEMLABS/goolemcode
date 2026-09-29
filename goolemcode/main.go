@@ -22,9 +22,11 @@ import (
 	"github.com/GOOLEMLABS/goolemcode/internal/commands"
 	"github.com/GOOLEMLABS/goolemcode/internal/config"
 	"github.com/GOOLEMLABS/goolemcode/internal/consensus"
+	"github.com/GOOLEMLABS/goolemcode/internal/console"
 	"github.com/GOOLEMLABS/goolemcode/internal/debug"
 	"github.com/GOOLEMLABS/goolemcode/internal/diff"
 	"github.com/GOOLEMLABS/goolemcode/internal/hooks"
+	"github.com/GOOLEMLABS/goolemcode/internal/inputq"
 	"github.com/GOOLEMLABS/goolemcode/internal/interrupt"
 	"github.com/GOOLEMLABS/goolemcode/internal/knowledge"
 	"github.com/GOOLEMLABS/goolemcode/internal/lineedit"
@@ -194,6 +196,12 @@ func main() {
 	in := bufio.NewReader(os.Stdin)
 	wd := interrupt.New(in) // coordinador del único lector de stdin (watchdog del turno vs. ask_user)
 
+	// Cola de mensajes que el usuario escribe mientras el agente trabaja. El
+	// watchdog la alimenta (cada Enter) y el agente la consume entre pasos; lo que
+	// sobre al terminar el turno lo recoge el REPL como siguiente entrada.
+	queue := inputq.New()
+	wd.SetOnLine(queue.Push)
+
 	// ask_user: el agente puede consultarte a mitad de tarea. Comparte el mismo
 	// lector de stdin (las lecturas son secuenciales, nunca concurrentes). Si el
 	// watchdog del turno está leyendo en modo raw, primero Release() lo detiene y
@@ -297,6 +305,7 @@ func main() {
 	}
 
 	ag := agent.New(prov, reg, cp, permit)
+	ag.SetPendingInput(queue.Drain) // inyecta entre pasos lo que escribas mientras trabaja
 	if cfg.MaxContextTokens > 0 {
 		ag.SetContextBudget(cfg.MaxContextTokens)
 	}
@@ -395,7 +404,8 @@ func main() {
 
 	for {
 		for {
-			if cfg.ShowStatusline && stdinIsTerminal() {
+			queued, hasQueued := queue.Pop()
+			if !hasQueued && cfg.ShowStatusline && stdinIsTerminal() {
 				branch, dirty := gitStatus(ws.Root())
 				label := prov.Label()
 				var savingsEstimate string
@@ -468,19 +478,31 @@ func main() {
 					CostTotal: costTotalStr,
 				}))
 			}
-			tag := ""
-			if planMode {
-				tag = " [plan]"
+			var input string
+			if hasQueued {
+				// Mensaje que escribiste mientras el agente trabajaba y que no
+				// llegó a inyectarse: se procesa ya, sin esperar a que teclees.
+				input = strings.TrimSpace(queued)
+				tag := ""
+				if planMode {
+					tag = " [plan]"
+				}
+				fmt.Printf("%s%s » %s\n", filepath.Base(ws.Root()), tag, input)
+			} else {
+				tag := ""
+				if planMode {
+					tag = " [plan]"
+				}
+				line, err := editor.ReadLine(fmt.Sprintf("%s%s » ", filepath.Base(ws.Root()), tag))
+				if err == lineedit.ErrInterrupted {
+					continue // Ctrl-C: descarta la línea, prompt nuevo
+				}
+				if err != nil {
+					fmt.Println("\nGoodbye")
+					return
+				}
+				input = strings.TrimSpace(line)
 			}
-			line, err := editor.ReadLine(fmt.Sprintf("%s%s » ", filepath.Base(ws.Root()), tag))
-			if err == lineedit.ErrInterrupted {
-				continue // Ctrl-C: descarta la línea, prompt nuevo
-			}
-			if err != nil {
-				fmt.Println("\nGoodbye")
-				return
-			}
-			input := strings.TrimSpace(line)
 			if input == "" {
 				continue
 			}
@@ -924,11 +946,11 @@ const (
 )
 
 func runTurn(ctx context.Context, ag *agent.Agent, input string, images []model.ImageData, tracker *usage.Tracker, provLabel string, showThinking *bool) {
-	fmt.Println("GoolemCode:")
+	console.Println("GoolemCode:")
 	inThinking := false
 	endThinking := func() {
 		if inThinking {
-			fmt.Print(ansiReset + "\n")
+			console.Print(ansiReset + "\n")
 			inThinking = false
 		}
 	}
@@ -939,20 +961,20 @@ func runTurn(ctx context.Context, ag *agent.Agent, input string, images []model.
 				return
 			}
 			if !inThinking {
-				fmt.Print("\n" + ansiDim)
+				console.Print("\n" + ansiDim)
 				inThinking = true
 			}
-			fmt.Print(s)
+			console.Print(s)
 		},
 		OnDelta: func(s string) {
 			endThinking()
-			fmt.Print(s)
+			console.Print(s)
 		},
 		OnToolCall: func(c model.ToolCall) {
 			endThinking()
 			b, _ := json.Marshal(c.Arguments)
 			debug.Logf("tool call %s(%s)", c.Name, short(string(b)))
-			fmt.Printf("\n%s→ %s(%s)%s\n", ansiCyan, c.Name, short(string(b)), ansiReset)
+			console.Printf("\n%s→ %s(%s)%s\n", ansiCyan, c.Name, short(string(b)), ansiReset)
 		},
 		OnToolResult: func(r model.ToolResult) {
 			tag := "✓"
@@ -962,14 +984,18 @@ func runTurn(ctx context.Context, ag *agent.Agent, input string, images []model.
 				color = ansiRed
 			}
 			debug.Logf("tool result error=%v %s", r.IsError, short(strings.ReplaceAll(r.Content, "\n", " ")))
-			fmt.Printf("  %s%s %s%s\n", color, tag, short(strings.ReplaceAll(r.Content, "\n", " ")), ansiReset)
+			console.Printf("  %s%s %s%s\n", color, tag, short(strings.ReplaceAll(r.Content, "\n", " ")), ansiReset)
+		},
+		OnUserInput: func(s string) {
+			debug.Logf("queued user message: %q", s)
+			console.Printf("\n↳ %s\n", s)
 		},
 	}
 	_, err := ag.RunWithImages(ctx, input, images, h)
 	endThinking()
 	if err != nil && ctx.Err() == nil {
 		debug.Logf("turn error: %v", err)
-		fmt.Printf("\n%sError: %v%s\n", ansiRed, err, ansiReset)
+		console.Printf("\n%sError: %v%s\n", ansiRed, err, ansiReset)
 	}
 	debug.Logf("runTurn end err=%v ctxErr=%v", err, ctx.Err())
 	if u := ag.TurnUsage(); u.InputTokens > 0 || u.OutputTokens > 0 {
@@ -981,10 +1007,10 @@ func runTurn(ctx context.Context, ag *agent.Agent, input string, images []model.
 		}
 		tracker.Add(activeLabel, u)
 		if st := globalScriptStore.Stats(); st.Runs > 0 {
-			fmt.Printf("\n[%s · turno %d↑ %d↓ · 📜%d -%s]\n",
+			console.Printf("\n[%s · turno %d↑ %d↓ · 📜%d -%s]\n",
 				activeLabel, u.InputTokens, u.OutputTokens, st.Runs, statusline.Human(st.Tokens))
 		} else {
-			fmt.Printf("\n[%s · turno %d↑ %d↓]\n",
+			console.Printf("\n[%s · turno %d↑ %d↓]\n",
 				activeLabel, u.InputTokens, u.OutputTokens)
 		}
 	}

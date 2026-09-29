@@ -1,11 +1,75 @@
 package agent
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/GOOLEMLABS/goolemcode/internal/model"
+	"github.com/GOOLEMLABS/goolemcode/internal/provider"
+	"github.com/GOOLEMLABS/goolemcode/internal/tools"
 )
+
+// scriptedProvider devuelve respuestas preprogramadas y guarda el historial
+// recibido en cada llamada a Chat.
+type scriptedProvider struct {
+	steps []model.Message
+	seen  [][]model.Message
+	i     int
+}
+
+func (p *scriptedProvider) Label() string { return "scripted" }
+
+func (p *scriptedProvider) Chat(_ context.Context, messages []model.Message, _ []model.ToolDefinition, _ string, _, _ provider.DeltaFunc) (model.Message, error) {
+	p.seen = append(p.seen, append([]model.Message(nil), messages...))
+	msg := p.steps[p.i]
+	p.i++
+	return msg, nil
+}
+
+// Regresión: lo que el usuario escribe mientras el agente trabaja se inyecta
+// como mensaje de usuario entre pasos (antes del siguiente Chat).
+func TestAgentInjectsQueuedInputBetweenSteps(t *testing.T) {
+	reg := tools.NewRegistry()
+	reg.Register(model.ToolDefinition{Name: "noop", Description: "x", InputSchema: map[string]any{"type": "object"}},
+		func(context.Context, map[string]any) (string, error) { return "ok", nil })
+
+	prov := &scriptedProvider{steps: []model.Message{
+		{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{{ID: "c1", Name: "noop", Arguments: map[string]any{}}}},
+		{Role: model.RoleAssistant, Content: "final"},
+	}}
+	ag := New(prov, reg, nil, nil)
+
+	calls := 0
+	ag.SetPendingInput(func() []string {
+		calls++
+		if calls == 2 { // solo en el 2º paso (entre pasos, no al inicio)
+			return []string{"mensaje mientras trabajaba"}
+		}
+		return nil
+	})
+
+	var injected []string
+	h := Hooks{OnUserInput: func(s string) { injected = append(injected, s) }}
+	if _, err := ag.Run(context.Background(), "hola", h); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(injected) != 1 || injected[0] != "mensaje mientras trabajaba" {
+		t.Fatalf("no se inyectó el mensaje encolado: %v", injected)
+	}
+	if len(prov.seen) != 2 {
+		t.Fatalf("esperado 2 llamadas a Chat, hubo %d", len(prov.seen))
+	}
+	found := false
+	for _, m := range prov.seen[1] {
+		if m.Role == model.RoleUser && m.Content == "mensaje mientras trabajaba" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("el 2º Chat no recibió el mensaje inyectado: %+v", prov.seen[1])
+	}
+}
 
 // buildRound crea una ronda: user → assistant(tool_call) → tool → assistant(texto).
 func buildRound(userText, filler string) []model.Message {
