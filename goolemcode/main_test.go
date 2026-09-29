@@ -55,11 +55,11 @@ func TestExpandMentionsIgnoresEmailAndMissing(t *testing.T) {
 
 	// Un email no es una mención (la @ va pegada a texto, no tras espacio/inicio),
 	// y un fichero inexistente se deja literal.
-	out, inc, _, _ := expandMentions("escribe a pepo@gmail.com sobre @noexiste.txt", ws)
+	out, inc, _, _ := expandMentions("escribe a user@example.com sobre @noexiste.txt", ws)
 	if len(inc) != 0 {
 		t.Fatalf("no debía incluir nada: %v", inc)
 	}
-	if out != "escribe a pepo@gmail.com sobre @noexiste.txt" {
+	if out != "escribe a user@example.com sobre @noexiste.txt" {
 		t.Fatalf("el mensaje no debía cambiar: %q", out)
 	}
 }
