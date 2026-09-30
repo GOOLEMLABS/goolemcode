@@ -8,7 +8,25 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/GOOLEMLABS/goolemcode/internal/console"
 )
+
+// El patrón que usan las herramientas (Stdout=Stderr=Capture) captura ambos
+// flujos y los reenvía en vivo.
+func TestCommandCapturesStdoutAndStderr(t *testing.T) {
+	cap := console.NewCapture(1000)
+	cmd := Command(context.Background(), "sh", "-c", "echo out; echo err >&2")
+	cmd.Stdout = cap
+	cmd.Stderr = cap
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	s := cap.String()
+	if !strings.Contains(s, "out") || !strings.Contains(s, "err") {
+		t.Fatalf("salida capturada=%q", s)
+	}
+}
 
 func TestEnvIsNonInteractive(t *testing.T) {
 	m := map[string]string{}

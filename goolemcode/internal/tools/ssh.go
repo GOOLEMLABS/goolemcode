@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GOOLEMLABS/goolemcode/internal/console"
 	"github.com/GOOLEMLABS/goolemcode/internal/model"
 	"github.com/GOOLEMLABS/goolemcode/internal/proc"
 )
@@ -53,11 +54,11 @@ func RegisterSSH(reg *Registry) {
 		defer cancel()
 
 		cmd := proc.Command(cmdCtx, "ssh", sshArgs...)
-		out, err := cmd.CombinedOutput()
-		s := string(out)
-		if len(s) > sshMaxOutput {
-			s = s[:sshMaxOutput] + "\n… (truncado)"
-		}
+		cap := console.NewCapture(sshMaxOutput) // salida en vivo + captura acotada
+		cmd.Stdout = cap
+		cmd.Stderr = cap
+		err := cmd.Run()
+		s := cap.String()
 
 		label := host
 		if u := str(args["user"]); u != "" {

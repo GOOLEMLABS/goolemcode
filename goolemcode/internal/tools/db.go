@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GOOLEMLABS/goolemcode/internal/console"
 	"github.com/GOOLEMLABS/goolemcode/internal/model"
 	"github.com/GOOLEMLABS/goolemcode/internal/proc"
 )
@@ -50,11 +51,11 @@ func RegisterDB(reg *Registry) {
 			return "", fmt.Errorf("unsupported type: %s (use sqlite or postgres)", dbType)
 		}
 
-		out, err := cmd.CombinedOutput()
-		s := string(out)
-		if len(s) > dbOutputMax {
-			s = s[:dbOutputMax] + "\n… (truncado)"
-		}
+		cap := console.NewCapture(dbOutputMax) // salida en vivo + captura acotada
+		cmd.Stdout = cap
+		cmd.Stderr = cap
+		err := cmd.Run()
+		s := cap.String()
 
 		if cmdCtx.Err() == context.DeadlineExceeded {
 			return fmt.Sprintf("Query aborted: timeout %ds.\n%s", timeout, s), nil

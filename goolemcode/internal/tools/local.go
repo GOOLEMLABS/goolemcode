@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GOOLEMLABS/goolemcode/internal/console"
 	"github.com/GOOLEMLABS/goolemcode/internal/model"
 	"github.com/GOOLEMLABS/goolemcode/internal/proc"
 )
@@ -263,11 +264,12 @@ func RegisterLocal(reg *Registry, ws *Workspace) {
 		defer cancel()
 		cmd := proc.Command(cmdCtx, "sh", "-c", str(args["command"]))
 		cmd.Dir = ws.Root()
-		out, err := cmd.CombinedOutput()
-		s := string(out)
-		if len(s) > maxOutput {
-			s = s[:maxOutput]
-		}
+		// Salida en vivo (se ve el progreso mientras corre) + captura acotada.
+		cap := console.NewCapture(maxOutput)
+		cmd.Stdout = cap
+		cmd.Stderr = cap
+		err := cmd.Run()
+		s := cap.String()
 		if cmdCtx.Err() == context.DeadlineExceeded {
 			return fmt.Sprintf("$ %s\nAborted: exceeded timeout of %ds.\n%s", str(args["command"]), timeout, s), nil
 		}

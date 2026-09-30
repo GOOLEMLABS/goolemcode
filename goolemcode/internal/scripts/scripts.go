@@ -1,7 +1,6 @@
 package scripts
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -11,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GOOLEMLABS/goolemcode/internal/console"
 	"github.com/GOOLEMLABS/goolemcode/internal/model"
 	"github.com/GOOLEMLABS/goolemcode/internal/proc"
 	"github.com/GOOLEMLABS/goolemcode/internal/securefs"
@@ -95,15 +95,12 @@ func (s *Store) Run(ctx context.Context, name string, scriptArgs string, timeout
 	if scriptArgs != "" {
 		cmd.Args = append(cmd.Args, strings.Fields(scriptArgs)...)
 	}
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
+	cap := console.NewCapture(20000) // salida en vivo + captura acotada
+	cmd.Stdout = cap
+	cmd.Stderr = cap
 
 	err := cmd.Run()
-	sout := out.String()
-	if len(sout) > 20000 {
-		sout = sout[:20000] + "\n… (truncado)"
-	}
+	sout := cap.String()
 
 	if cmdCtx.Err() == context.DeadlineExceeded {
 		return sout + fmt.Sprintf("\nAborted: timeout %ds.", timeout), -1, nil

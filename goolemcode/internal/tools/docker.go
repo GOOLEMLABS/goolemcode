@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GOOLEMLABS/goolemcode/internal/console"
 	"github.com/GOOLEMLABS/goolemcode/internal/model"
 	"github.com/GOOLEMLABS/goolemcode/internal/proc"
 )
@@ -39,11 +40,11 @@ func RegisterDocker(reg *Registry) {
 		defer cancel()
 
 		cmd := proc.Command(cmdCtx, "docker", "exec", container, "sh", "-c", command)
-		out, err := cmd.CombinedOutput()
-		s := string(out)
-		if len(s) > dockerOutputMax {
-			s = s[:dockerOutputMax] + "\n… (truncado)"
-		}
+		cap := console.NewCapture(dockerOutputMax) // salida en vivo + captura acotada
+		cmd.Stdout = cap
+		cmd.Stderr = cap
+		err := cmd.Run()
+		s := cap.String()
 
 		if cmdCtx.Err() == context.DeadlineExceeded {
 			return fmt.Sprintf("$ docker exec %s sh -c %q\n%s\nAborted: timeout %ds.", container, command, s, timeout), nil
@@ -89,11 +90,11 @@ func RegisterDocker(reg *Registry) {
 		defer cancel()
 
 		cmd := proc.Command(cmdCtx, "docker", dockerArgs...)
-		out, err := cmd.CombinedOutput()
-		s := string(out)
-		if len(s) > dockerOutputMax {
-			s = s[:dockerOutputMax] + "\n… (truncado)"
-		}
+		cap := console.NewCapture(dockerOutputMax) // salida en vivo + captura acotada
+		cmd.Stdout = cap
+		cmd.Stderr = cap
+		err := cmd.Run()
+		s := cap.String()
 		if err != nil {
 			return fmt.Sprintf("Docker logs error: %s\n%s", err, s), nil
 		}
