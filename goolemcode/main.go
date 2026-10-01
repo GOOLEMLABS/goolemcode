@@ -315,6 +315,7 @@ func main() {
 	if cfg.MaxContextTokens > 0 {
 		ag.SetContextBudget(cfg.MaxContextTokens)
 	}
+	ag.SetMaxSteps(cfg.MaxSteps)
 	sess := session.New(cfg.Workdir) // conversación persistida (anclada al arranque)
 	if cfg.Resume {
 		if prev := sess.Load(); len(prev) > 0 {

@@ -76,7 +76,16 @@ func (a *Agent) SessionUsage() model.Usage { return a.sessionUsage }
 const defaultContextBudget = 24000
 
 func New(p provider.Provider, reg *tools.Registry, cp *checkpoint.Manager, permit PermissionFunc) *Agent {
-	return &Agent{prov: p, reg: reg, cp: cp, permit: permit, system: systemPrompt, maxSteps: 50, contextBudget: defaultContextBudget}
+	return &Agent{prov: p, reg: reg, cp: cp, permit: permit, system: systemPrompt, maxSteps: 200, contextBudget: defaultContextBudget}
+}
+
+// SetMaxSteps ajusta el máximo de pasos (rondas de chat/tool) por turno. Un tope
+// bajo corta tareas largas a medias ("[Se alcanzó el máximo de pasos]") y obliga
+// al usuario a pedir que continúe.
+func (a *Agent) SetMaxSteps(n int) {
+	if n > 0 {
+		a.maxSteps = n
+	}
 }
 
 // SetContextBudget ajusta el presupuesto de tokens del historial (0 = sin límite).

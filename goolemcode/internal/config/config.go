@@ -40,6 +40,8 @@ type Config struct {
 	// StreamIdleTimeoutSeconds aborta la respuesta de un proveedor si pasan estos
 	// segundos sin recibir datos (evita cuelgues por streams estancados).
 	StreamIdleTimeoutSeconds int `json:"stream_idle_timeout_seconds"`
+	// MaxSteps es el máximo de pasos (rondas chat/tool) por turno antes de parar.
+	MaxSteps int `json:"max_steps"`
 
 	Workdir     string `json:"-"`
 	AutoApprove bool   `json:"-"`
@@ -95,6 +97,7 @@ func Load() Config {
 		ShowThinking:             true, // por defecto sí; el JSON puede ponerlo en false
 		ShowStatusline:           true,
 		StreamIdleTimeoutSeconds: 120, // aborta si el proveedor no envía datos en 2 min
+		MaxSteps:                 200, // pasos por turno (subir para tareas largas)
 		// Smart routing activo por defecto: enruta las tareas simples al modelo
 		// secundario (más barato) y las complejas al primario. Si no quieres
 		// usarlo, pon "smart_routing": { "enabled": false } en goolemcode.json.
