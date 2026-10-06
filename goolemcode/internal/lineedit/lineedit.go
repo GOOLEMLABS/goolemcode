@@ -30,6 +30,11 @@ var (
 
 const maxHistory = 1000
 
+// pasteBase es la primera runa del área de uso privado que usamos como marcador
+// de un bloque pegado. Cada pegado ocupa UNA sola runa en el buffer (así se
+// borra/mueve como una unidad) y se muestra como "[Pasted text #N +M lines]".
+const pasteBase = '\uE000'
+
 // Editor mantiene el historial y comparte el lector de stdin con el resto del
 // REPL (las lecturas son secuenciales, nunca concurrentes).
 type Editor struct {
@@ -39,7 +44,8 @@ type Editor struct {
 	pos      int // índice de navegación en el historial
 	// complete devuelve los reemplazos completos para la palabra actual (Tab).
 	complete  func(word string) []string
-	lastLines int // líneas físicas que ocupó el último redraw (para limpiar multilínea)
+	lastLines int      // líneas físicas que ocupó el último redraw (para limpiar multilínea)
+	pastes    []string // bloques pegados (bracketed paste), referenciados por marcador
 }
 
 // SetCompleter registra el autocompletado (Tab). El completador recibe la palabra
@@ -76,7 +82,13 @@ func (e *Editor) ReadLine(prompt string) (string, error) {
 		}
 		return strings.TrimRight(line, "\r\n"), nil
 	}
-	defer restore()
+	// Bracketed paste: el terminal envuelve el pegado en ESC[200~ … ESC[201~,
+	// de modo que podemos tratarlo como un bloque (sin que cada \n envíe la línea).
+	fmt.Print("\x1b[?2004h")
+	defer func() {
+		fmt.Print("\x1b[?2004l")
+		restore()
+	}()
 	return e.editLine(prompt)
 }
 
@@ -85,6 +97,7 @@ func (e *Editor) editLine(prompt string) (string, error) {
 	var buf []rune
 	cursor := 0
 	e.pos = len(e.history)
+	e.pastes = e.pastes[:0] // cada línea tiene sus propios bloques pegados
 	e.redraw(prompt, buf, cursor)
 
 	for {
@@ -95,7 +108,7 @@ func (e *Editor) editLine(prompt string) (string, error) {
 		switch r {
 		case '\r', '\n': // Enter
 			fmt.Print("\r\n")
-			line := string(buf)
+			line := e.expandPastes(buf)
 			e.addHistory(line)
 			return line, nil
 		case 3: // Ctrl-C
@@ -168,6 +181,40 @@ func (e *Editor) editLine(prompt string) (string, error) {
 			if err != nil {
 				return "", err
 			}
+			// Secuencia CSI numérica ("ESC [ <números> ~"): pegado (200), Supr (3)…
+			if r2 == '[' && r3 >= '0' && r3 <= '9' {
+				param := []rune{r3}
+				for {
+					rr, _, err := e.in.ReadRune()
+					if err != nil {
+						return "", err
+					}
+					if rr == '~' {
+						break
+					}
+					param = append(param, rr)
+				}
+				switch string(param) {
+				case "200": // inicio de bloque pegado
+					text, err := e.readPaste()
+					if err != nil {
+						return "", err
+					}
+					e.pastes = append(e.pastes, text)
+					marker := pasteBase + rune(len(e.pastes)-1)
+					buf = append(buf, 0)
+					copy(buf[cursor+1:], buf[cursor:])
+					buf[cursor] = marker
+					cursor++
+					e.redraw(prompt, buf, cursor)
+				case "3": // Supr
+					if cursor < len(buf) {
+						buf = append(buf[:cursor], buf[cursor+1:]...)
+						e.redraw(prompt, buf, cursor)
+					}
+				}
+				break
+			}
 			switch r3 {
 			case 'A': // ↑ historial anterior
 				if s, ok := e.historyPrev(); ok {
@@ -197,11 +244,6 @@ func (e *Editor) editLine(prompt string) (string, error) {
 			case 'F': // End
 				cursor = len(buf)
 				e.redraw(prompt, buf, cursor)
-			case '3': // Supr: ESC [ 3 ~
-				if r4, _, _ := e.in.ReadRune(); r4 == '~' && cursor < len(buf) {
-					buf = append(buf[:cursor], buf[cursor+1:]...)
-					e.redraw(prompt, buf, cursor)
-				}
 			}
 		default:
 			if r >= 32 { // imprimible
@@ -227,12 +269,28 @@ func (e *Editor) redraw(prompt string, buf []rune, cursor int) {
 	}
 	fmt.Print("\r\x1b[0J") // columna 0, borrar hasta el final de la pantalla
 
-	// Dibujar prompt + buffer
+	// Dibujar prompt + buffer (los bloques pegados se muestran como etiqueta).
 	fmt.Print(prompt)
-	fmt.Print(string(buf))
+	vis := 0
+	curVis := 0
+	for i, r := range buf {
+		if i == cursor {
+			curVis = vis
+		}
+		if lbl, ok := e.pasteLabel(r); ok {
+			fmt.Print(lbl)
+			vis += len([]rune(lbl))
+		} else {
+			fmt.Print(string(r))
+			vis++
+		}
+	}
+	if cursor == len(buf) {
+		curVis = vis
+	}
 
 	// Calcular cuántas líneas físicas ocupa ahora
-	total := pr + len(buf)
+	total := pr + vis
 	if total == 0 {
 		e.lastLines = 1
 	} else {
@@ -240,7 +298,7 @@ func (e *Editor) redraw(prompt string, buf []rune, cursor int) {
 	}
 
 	// Posicionar el cursor dentro del texto
-	cursorPos := pr + cursor        // columna visual absoluta (en runas)
+	cursorPos := pr + curVis        // columna visual absoluta (en runas)
 	tgtLine := cursorPos / w        // línea destino (0 = primera)
 	tgtCol := cursorPos % w         // columna dentro de esa línea
 	up := e.lastLines - 1 - tgtLine // líneas que subir desde el final
@@ -248,6 +306,52 @@ func (e *Editor) redraw(prompt string, buf []rune, cursor int) {
 		fmt.Printf("\x1b[%dA", up)
 	}
 	fmt.Printf("\r\x1b[%dC", tgtCol)
+}
+
+// readPaste lee el contenido de un bloque pegado hasta el marcador de fin
+// ESC[201~ (bracketed paste). Devuelve el texto tal cual, con sus saltos de línea.
+func (e *Editor) readPaste() (string, error) {
+	end := []rune("\x1b[201~")
+	var out []rune
+	for {
+		r, _, err := e.in.ReadRune()
+		if err != nil {
+			return string(out), err
+		}
+		out = append(out, r)
+		if len(out) >= len(end) && string(out[len(out)-len(end):]) == string(end) {
+			return string(out[:len(out)-len(end)]), nil
+		}
+	}
+}
+
+// pasteLabel devuelve la etiqueta visible de un marcador de pegado, o ("",false)
+// si la runa no es un marcador.
+func (e *Editor) pasteLabel(r rune) (string, bool) {
+	if r < pasteBase || r > '\uF8FF' {
+		return "", false
+	}
+	i := int(r - pasteBase)
+	if i >= len(e.pastes) {
+		return "", false
+	}
+	lines := strings.Count(e.pastes[i], "\n") + 1
+	return fmt.Sprintf("[Pasted text #%d +%d lines]", i+1, lines), true
+}
+
+// expandPastes sustituye los marcadores de pegado por su contenido real.
+func (e *Editor) expandPastes(buf []rune) string {
+	var sb strings.Builder
+	for _, r := range buf {
+		if r >= pasteBase && r <= '\uF8FF' {
+			if i := int(r - pasteBase); i < len(e.pastes) {
+				sb.WriteString(e.pastes[i])
+				continue
+			}
+		}
+		sb.WriteRune(r)
+	}
+	return sb.String()
 }
 
 // termWidth devuelve el ancho del terminal en columnas, o 80 si falla.
@@ -323,6 +427,8 @@ func (e *Editor) addHistory(line string) {
 	if strings.TrimSpace(line) == "" {
 		return
 	}
+	// El historial es una línea por entrada: aplana los saltos del pegado.
+	line = strings.ReplaceAll(line, "\n", " ")
 	if n := len(e.history); n > 0 && e.history[n-1] == line {
 		e.pos = len(e.history)
 		return // no dupliques la anterior consecutiva
