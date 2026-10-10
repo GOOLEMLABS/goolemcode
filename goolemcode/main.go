@@ -627,10 +627,14 @@ func main() {
 						fmt.Printf("Unknown model: %q. Available: %s\n", arg, strings.Join(modelNames, ", "))
 						break
 					}
+					// Persistir TAMBIÉN el proveedor: si no, al reiniciar quedaba
+					// provider antiguo + model nuevo (p. ej. ollama + deepseek-…).
+					if pname := providerName(newProv); pname != "" {
+						cfg.Provider = pname
+					}
+					cfg.Model = arg
 					if router, isRouter := prov.(*provider.SmartRouter); isRouter {
 						router.SetPrimary(newProv)
-						// Persistir modelo primario para SmartRouter
-						cfg.Model = arg
 						if err := cfg.SaveConfig(); err != nil {
 							fmt.Fprintf(os.Stderr, "(warning: could not save model: %v)\n", err)
 						}
@@ -638,7 +642,6 @@ func main() {
 					} else {
 						prov = newProv
 						ag.SetProvider(newProv)
-						cfg.Model = arg
 						if err := cfg.SaveConfig(); err != nil {
 							fmt.Fprintf(os.Stderr, "(warning: could not save model: %v)\n", err)
 						}
@@ -731,6 +734,21 @@ func permChoiceFromRune(r rune) int {
 	default:
 		return 0
 	}
+}
+
+// providerName deduce el nombre de proveedor de config ("deepseek" | "claude" |
+// "ollama") a partir del tipo del Provider, para persistirlo con /model y evitar
+// el desajuste provider/model al reiniciar.
+func providerName(p provider.Provider) string {
+	switch p.(type) {
+	case *provider.DeepSeek:
+		return "deepseek"
+	case *provider.Anthropic:
+		return "claude"
+	case *provider.Ollama:
+		return "ollama"
+	}
+	return ""
 }
 
 // runTurnInterruptible lanza runTurn en una goroutine y permite cancelarla con

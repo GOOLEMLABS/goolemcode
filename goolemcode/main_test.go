@@ -7,8 +7,25 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/GOOLEMLABS/goolemcode/internal/provider"
 	"github.com/GOOLEMLABS/goolemcode/internal/tools"
 )
+
+func TestProviderName(t *testing.T) {
+	cases := []struct {
+		p    provider.Provider
+		want string
+	}{
+		{provider.NewDeepSeek("k", "m"), "deepseek"},
+		{provider.NewAnthropic("m", 100, "high"), "claude"},
+		{provider.NewOllama("http://localhost:11434", "m"), "ollama"},
+	}
+	for _, tc := range cases {
+		if got := providerName(tc.p); got != tc.want {
+			t.Fatalf("providerName(%T)=%q, esperado %q", tc.p, got, tc.want)
+		}
+	}
+}
 
 // Regresión: el menú debe respetar la tecla del usuario y no auto-denegar.
 // Antes, el goroutine del timeout competía por el canal y le robaba la tecla;
