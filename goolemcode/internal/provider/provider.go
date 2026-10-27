@@ -20,3 +20,21 @@ type Provider interface {
 	Chat(ctx context.Context, messages []model.Message, tools []model.ToolDefinition, system string, onDelta, onThinking DeltaFunc) (model.Message, error)
 	Label() string
 }
+
+// HistoryTrimmer es una interfaz OPCIONAL que un proveedor puede implementar si
+// guarda razonamiento (thinking/reasoning) o argumentos crudos en el historial.
+// El agente la invoca antes de cada llamada para purgar ese contenido de los
+// turnos ya cerrados y no reenviarlo indefinidamente.
+//
+// El proveedor debe respetar las reglas de su API: p. ej. Anthropic exige
+// conservar los bloques de thinking dentro del turno de tool-use en curso
+// (keepFrom en adelante), pero permite omitirlos en turnos ya cerrados. Los
+// proveedores que no persisten reasoning (DeepSeek, Ollama) no necesitan
+// implementarla.
+//
+// keepFrom es el índice donde empieza el turno actual (el mensaje de contexto
+// dinámico o, si no hay, el mensaje del usuario). Todo lo anterior son turnos
+// cerrados y se puede purgar.
+type HistoryTrimmer interface {
+	TrimHistory(messages []model.Message, keepFrom int) []model.Message
+}

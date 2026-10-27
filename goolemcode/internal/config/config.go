@@ -16,24 +16,27 @@ import (
 )
 
 type Config struct {
-	Provider           string             `json:"provider"`
-	Model              string             `json:"model"`
-	OllamaURL          string             `json:"ollama_url"`
-	MaxTokens          int                `json:"max_tokens"`
-	Effort             string             `json:"effort"`
-	MCPServers         []mcp.ServerSpec   `json:"mcp_servers"`
-	KnowledgeDir       string             `json:"knowledge_dir"`        // "" => <workdir>/.goolem/knowledge
-	GlobalKnowledgeDir string             `json:"global_knowledge_dir"` // "" => ~/.goolem/knowledge
-	Rag                RagConfig          `json:"rag"`
-	DeepSeekModel      string             `json:"deepseek_model"`     // "" => deepseek-v4-pro
-	MaxContextTokens   int                `json:"max_context_tokens"` // 0 => valor por defecto del agente
-	ShowThinking       bool               `json:"show_thinking"`      // mostrar el razonamiento del modelo (qwen3…)
-	ShowStatusline     bool               `json:"show_statusline"`    // línea de estado sobre el prompt
-	ModelAliases       map[string]string  `json:"model_aliases"`      // alias -> real name
-	ApprovedTools      []string           `json:"approved_tools"`     // herramientas siempre permitidas
-	PlanMode           string             `json:"plan_mode"`          // "safe" | "fast" (decisión de inicio)
-	OnboardingDone     bool               `json:"onboarding_done"`    // si ya pasó por el onboarding
-	SmartRouting       SmartRoutingConfig `json:"smart_routing"`
+	Provider           string           `json:"provider"`
+	Model              string           `json:"model"`
+	OllamaURL          string           `json:"ollama_url"`
+	MaxTokens          int              `json:"max_tokens"`
+	Effort             string           `json:"effort"`
+	MCPServers         []mcp.ServerSpec `json:"mcp_servers"`
+	KnowledgeDir       string           `json:"knowledge_dir"`        // "" => <workdir>/.goolem/knowledge
+	GlobalKnowledgeDir string           `json:"global_knowledge_dir"` // "" => ~/.goolem/knowledge
+	Rag                RagConfig        `json:"rag"`
+	DeepSeekModel      string           `json:"deepseek_model"`     // "" => deepseek-v4-pro
+	MaxContextTokens   int              `json:"max_context_tokens"` // 0 => valor por defecto del agente
+	// MaxTurnTokens acota los tokens estimados del turno en curso (poda
+	// intra-turno de salidas de tools y argumentos voluminosos). 0 => 16000.
+	MaxTurnTokens  int                `json:"max_turn_tokens"`
+	ShowThinking   bool               `json:"show_thinking"`   // mostrar el razonamiento del modelo (qwen3…)
+	ShowStatusline bool               `json:"show_statusline"` // línea de estado sobre el prompt
+	ModelAliases   map[string]string  `json:"model_aliases"`   // alias -> real name
+	ApprovedTools  []string           `json:"approved_tools"`  // herramientas siempre permitidas
+	PlanMode       string             `json:"plan_mode"`       // "safe" | "fast" (decisión de inicio)
+	OnboardingDone bool               `json:"onboarding_done"` // si ya pasó por el onboarding
+	SmartRouting   SmartRoutingConfig `json:"smart_routing"`
 
 	Debug bool `json:"debug"` // modo depuración: log en .goolem/debug.log + volcado de goroutines con SIGUSR1
 

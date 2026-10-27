@@ -40,15 +40,26 @@ func NewAnthropic(modelID string, maxTokens int, effort string) *Anthropic {
 
 func (a *Anthropic) Label() string { return fmt.Sprintf("Claude (%s)", a.Model) }
 
+type antCacheControl struct {
+	Type string `json:"type"`
+}
+
+type antSystemBlock struct {
+	Type         string           `json:"type"`
+	Text         string           `json:"text"`
+	CacheControl *antCacheControl `json:"cache_control,omitempty"`
+}
+
 type antTool struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	InputSchema map[string]any `json:"input_schema"`
+	Name         string           `json:"name"`
+	Description  string           `json:"description"`
+	InputSchema  map[string]any   `json:"input_schema"`
+	CacheControl *antCacheControl `json:"cache_control,omitempty"`
 }
 type antReq struct {
 	Model        string           `json:"model"`
 	MaxTokens    int              `json:"max_tokens"`
-	System       string           `json:"system,omitempty"`
+	System       []antSystemBlock `json:"system,omitempty"`
 	Messages     []map[string]any `json:"messages"`
 	Tools        []antTool        `json:"tools,omitempty"`
 	Thinking     map[string]any   `json:"thinking,omitempty"`
@@ -60,15 +71,27 @@ func (a *Anthropic) Chat(ctx context.Context, messages []model.Message, tools []
 	req := antReq{
 		Model:        a.Model,
 		MaxTokens:    a.MaxTokens,
-		System:       system,
 		Thinking:     map[string]any{"type": "adaptive"},
 		OutputConfig: map[string]any{"effort": a.Effort},
 		Stream:       true,
 	}
-	for _, t := range tools {
-		req.Tools = append(req.Tools, antTool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema})
+	// El system prompt es estable (contexto dinámico va como mensaje aparte):
+	// se marca como prefijo cacheable.
+	if system != "" {
+		req.System = []antSystemBlock{{
+			Type: "text", Text: system,
+			CacheControl: &antCacheControl{Type: "ephemeral"},
+		}}
+	}
+	for i, t := range tools {
+		at := antTool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema}
+		if i == len(tools)-1 { // último schema: fin del prefijo estático de tools
+			at.CacheControl = &antCacheControl{Type: "ephemeral"}
+		}
+		req.Tools = append(req.Tools, at)
 	}
 	req.Messages = toAPIMessages(messages)
+	addCacheBreakpoints(req.Messages)
 
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -118,6 +141,13 @@ func toAPIMessages(messages []model.Message) []map[string]any {
 				out = appendUser(out, blocks)
 			} else {
 				out = appendUser(out, m.Content)
+			}
+		case model.RoleSystem:
+			// Anthropic no admite role "system" dentro de messages: el contexto
+			// dinámico (fecha, notas, tareas) viaja como bloque de usuario, fuera
+			// del system cacheable.
+			if m.Content != "" {
+				out = appendUser(out, "[AUTO-GENERATED CONTEXT]\n"+m.Content)
 			}
 		case model.RoleAssistant:
 			if len(m.ProviderRaw) > 0 {
@@ -170,6 +200,136 @@ func userBlocks(content any) []map[string]any {
 		return c
 	}
 	return nil
+}
+
+// cacheableBlockTypes son los tipos de bloque que aceptan cache_control.
+var cacheableBlockTypes = map[string]bool{
+	"text": true, "tool_use": true, "tool_result": true, "image": true, "document": true,
+}
+
+// addCacheBreakpoints coloca hasta 2 breakpoints de caché al final de la
+// conversación (en los dos últimos mensajes), de modo que el prefijo estable
+// (system + tools + historial) se reutilice entre pasos del bucle. Con system y
+// tools ya hay 2 breakpoints; el límite de Anthropic es 4 por petición.
+func addCacheBreakpoints(msgs []map[string]any) {
+	added := 0
+	for i := len(msgs) - 1; i >= 0 && added < 2; i-- {
+		if markLastCacheableBlock(msgs[i]) {
+			added++
+		}
+	}
+}
+
+// markLastCacheableBlock añade cache_control al último bloque cacheable del
+// mensaje. Devuelve false si el mensaje no tiene contenido cacheable.
+func markLastCacheableBlock(m map[string]any) bool {
+	blocks, ok := normalizeBlocks(m["content"])
+	if !ok {
+		return false
+	}
+	m["content"] = blocks
+	for i := len(blocks) - 1; i >= 0; i-- {
+		typ, _ := blocks[i]["type"].(string)
+		if cacheableBlockTypes[typ] {
+			blocks[i]["cache_control"] = map[string]any{"type": "ephemeral"}
+			return true
+		}
+	}
+	return false
+}
+
+// normalizeBlocks convierte el content de un mensaje (string o arrays de JSON)
+// a []map[string]any para poder inspeccionarlo y mutarlo.
+func normalizeBlocks(content any) ([]map[string]any, bool) {
+	switch c := content.(type) {
+	case string:
+		if c == "" {
+			return nil, false
+		}
+		return []map[string]any{{"type": "text", "text": c}}, true
+	case []map[string]any:
+		return c, len(c) > 0
+	case []any:
+		out := make([]map[string]any, 0, len(c))
+		for _, v := range c {
+			b, ok := v.(map[string]any)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, b)
+		}
+		return out, len(out) > 0
+	}
+	return nil, false
+}
+
+// maxRawArgBytes limita las cadenas dentro de los inputs crudos de tool_use que
+// se conservan en turnos ya cerrados (p. ej. el contenido de write_file).
+const maxRawArgBytes = 800
+
+// TrimHistory implementa provider.HistoryTrimmer para Anthropic.
+//
+// Reglas de la API (thinking con tool use):
+//   - Dentro del turno de tool-use EN CURSO (i >= keepFrom) hay que devolver
+//     todos los bloques de thinking: no se pueden omitir ni reordenar.
+//   - Fuera de ese turno (turnos ya cerrados) se pueden omitir.
+//
+// Además, para todos los turnos salvo la assistant MÁS RECIENTE, sustituye por
+// un marcador los inputs enormes de tool_use (contenido de write_file,
+// old_string de edit_file…): el bloque tool_use se conserva (necesario para
+// emparejar tool_result) pero deja de reenviarse el contenido completo.
+// Si un turno cerrado del asistente no tiene tool_use, descarta ProviderRaw
+// entero: basta con Content.
+func (a *Anthropic) TrimHistory(msgs []model.Message, keepFrom int) []model.Message {
+	out := make([]model.Message, len(msgs))
+	copy(out, msgs)
+	if keepFrom < 0 {
+		keepFrom = 0
+	}
+	if keepFrom > len(out) {
+		keepFrom = len(out)
+	}
+	lastAssistant := -1
+	for i := len(out) - 1; i >= 0; i-- {
+		if out[i].Role == model.RoleAssistant {
+			lastAssistant = i
+			break
+		}
+	}
+	for i := range out {
+		if out[i].Role != model.RoleAssistant || len(out[i].ProviderRaw) == 0 {
+			continue
+		}
+		inActiveTurn := i >= keepFrom
+		if !inActiveTurn && len(out[i].ToolCalls) == 0 {
+			out[i].ProviderRaw = nil
+			continue
+		}
+		var blocks []map[string]any
+		if json.Unmarshal(out[i].ProviderRaw, &blocks) != nil {
+			continue
+		}
+		kept := make([]map[string]any, 0, len(blocks))
+		for _, b := range blocks {
+			typ, _ := b["type"].(string)
+			if !inActiveTurn && (typ == "thinking" || typ == "redacted_thinking") {
+				continue
+			}
+			// El input completo solo se conserva en la assistant MÁS RECIENTE del
+			// turno activo; en turnos cerrados (o en pasos anteriores del mismo
+			// turno) ya no hace falta el contenido íntegro.
+			if typ == "tool_use" && (!inActiveTurn || i != lastAssistant) {
+				if input, ok := b["input"]; ok {
+					b["input"], _ = model.ShrinkStrings(input, maxRawArgBytes)
+				}
+			}
+			kept = append(kept, b)
+		}
+		if nb, err := json.Marshal(kept); err == nil {
+			out[i].ProviderRaw = nb
+		}
+	}
+	return out
 }
 
 // --- parsing del stream SSE ---

@@ -8,6 +8,8 @@
   "debug": false,
   "stream_idle_timeout_seconds": 120,
   "max_steps": 200,
+  "max_context_tokens": 24000,
+  "max_turn_tokens": 16000,
 
   "rag": {
     "enabled": false,

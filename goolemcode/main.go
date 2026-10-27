@@ -315,6 +315,9 @@ func main() {
 	if cfg.MaxContextTokens > 0 {
 		ag.SetContextBudget(cfg.MaxContextTokens)
 	}
+	if cfg.MaxTurnTokens > 0 {
+		ag.SetTurnBudget(cfg.MaxTurnTokens)
+	}
 	ag.SetMaxSteps(cfg.MaxSteps)
 	sess := session.New(cfg.Workdir) // conversación persistida (anclada al arranque)
 	if cfg.Resume {
@@ -329,9 +332,10 @@ func main() {
 	// Comandos slash personalizados (.goolem/commands/*.md), anclados al arranque.
 	// Necesitamos cmdStore antes que contextFn porque este lo usa.
 	cmdStore := commands.New(filepath.Join(cfg.Workdir, ".goolem", "commands"))
-	contextFn := func() string { // contexto al system prompt cada turno
+	contextFn := func() string { // contexto dinámico: va como mensaje de sistema al inicio de cada turno
 		parts := []string{
-			"TODAY'S DATE: " + time.Now().Format("Monday 2006-01-02 15:04 MST"),
+			// Sin hora: el prefijo debe permanecer estable (caché de prompt).
+			"TODAY'S DATE: " + time.Now().Format("Monday 2006-01-02 MST"),
 			"CURRENT WORKING DIRECTORY: " + ws.Root(),
 		}
 		if planMode {

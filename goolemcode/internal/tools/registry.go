@@ -107,7 +107,7 @@ func (r *Registry) Execute(ctx context.Context, call model.ToolCall) model.ToolR
 	} else if out == "" {
 		res.Content = "(no output)"
 	} else {
-		res.Content = out
+		res.Content = truncateMiddle(out, maxToolResultBytes)
 	}
 	if r.postHook != nil { // PostToolUse: side effects (formatting, notifying…)
 		r.postHook(call.Name, call.Arguments, res.Content, res.IsError)

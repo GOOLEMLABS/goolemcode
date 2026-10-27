@@ -13,15 +13,17 @@ import (
 // scriptedProvider devuelve respuestas preprogramadas y guarda el historial
 // recibido en cada llamada a Chat.
 type scriptedProvider struct {
-	steps []model.Message
-	seen  [][]model.Message
-	i     int
+	steps   []model.Message
+	seen    [][]model.Message
+	systems []string
+	i       int
 }
 
 func (p *scriptedProvider) Label() string { return "scripted" }
 
-func (p *scriptedProvider) Chat(_ context.Context, messages []model.Message, _ []model.ToolDefinition, _ string, _, _ provider.DeltaFunc) (model.Message, error) {
+func (p *scriptedProvider) Chat(_ context.Context, messages []model.Message, _ []model.ToolDefinition, system string, _, _ provider.DeltaFunc) (model.Message, error) {
 	p.seen = append(p.seen, append([]model.Message(nil), messages...))
+	p.systems = append(p.systems, system)
 	msg := p.steps[p.i]
 	p.i++
 	return msg, nil
@@ -146,5 +148,126 @@ func TestCompactHistoryKeepsCurrentRound(t *testing.T) {
 	out, dropped := compactHistory(msgs, 10)
 	if dropped != 0 || len(out) != len(msgs) {
 		t.Fatalf("no debe descartar la única ronda: dropped=%d len=%d", dropped, len(out))
+	}
+}
+
+// El contexto dinámico va en un RoleSystem justo antes del RoleUser de su turno.
+// Al descartar una ronda antigua no debemos llevarnos el contexto de la ronda
+// que se conserva.
+func TestCompactHistoryKeepsNextRoundContext(t *testing.T) {
+	big := strings.Repeat("x", 8000)
+	msgs := []model.Message{
+		{Role: model.RoleSystem, Content: "CONTEXTO-1"},
+		{Role: model.RoleUser, Content: "ronda1"},
+		{Role: model.RoleAssistant, Content: strings.Repeat("a", 2000)},
+		{Role: model.RoleSystem, Content: "CONTEXTO-2"},
+		{Role: model.RoleUser, Content: "ronda2"},
+		{Role: model.RoleAssistant, Content: big},
+	}
+	out, dropped := compactHistory(msgs, 2500)
+	if dropped == 0 {
+		t.Fatal("debía descartar la primera ronda")
+	}
+	if out[0].Role != model.RoleSystem || out[0].Content != "CONTEXTO-2" {
+		t.Fatalf("debía conservar el contexto de la ronda actual, inicio=%+v", out[0])
+	}
+}
+
+func TestPruneTurnSummarizesOldResultsAndShrinksArgs(t *testing.T) {
+	big := strings.Repeat("r", 5000)
+	msgs := []model.Message{
+		{Role: model.RoleUser, Content: "tarea"},
+	}
+	for i := 0; i < 5; i++ {
+		msgs = append(msgs,
+			model.Message{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{{
+				ID: "c" + string(rune('0'+i)), Name: "write_file",
+				Arguments: map[string]any{"path": "p", "content": big},
+			}}},
+			model.Message{Role: model.RoleTool, ToolResults: []model.ToolResult{{
+				CallID: "c" + string(rune('0'+i)), Content: big,
+			}}},
+		)
+	}
+	out, pruned := pruneTurn(msgs, 0, 2000)
+	if pruned == 0 {
+		t.Fatal("debía podar el turno")
+	}
+	// Los primeros resultados quedan resumidos; el último se conserva entero.
+	first := out[1+1].ToolResults[0].Content // primer RoleTool
+	if !strings.Contains(first, "output omitted") {
+		t.Fatalf("el resultado antiguo debía resumirse: %q", first[:80])
+	}
+	lastIdx := len(out) - 1
+	last := out[lastIdx].ToolResults[0].Content
+	if last != big {
+		t.Fatal("el último resultado debía conservarse íntegro")
+	}
+	// Los args antiguos se recortan, pero se conserva id/nombre/path.
+	args := out[1].ToolCalls[0]
+	if args.Name != "write_file" || args.ID != "c0" || args.Arguments["path"] != "p" {
+		t.Fatalf("debía conservar identidad de la acción: %+v", args)
+	}
+	if args.Arguments["content"] == big {
+		t.Fatal("debía recortar el content del write_file antiguo")
+	}
+	// Pairing intacto.
+	for _, m := range out {
+		for _, tr := range m.ToolResults {
+			found := false
+			for _, prev := range out {
+				for _, tc := range prev.ToolCalls {
+					if tc.ID == tr.CallID {
+						found = true
+					}
+				}
+			}
+			if !found {
+				t.Fatalf("tool_result %s sin tool_use", tr.CallID)
+			}
+		}
+	}
+}
+
+// El contexto dinámico va UNA vez por turno como RoleSystem, delante del
+// mensaje del usuario, y el system prompt que recibe el proveedor es estático.
+func TestAgentContextIsPerTurnSystemMessage(t *testing.T) {
+	reg := tools.NewRegistry()
+	prov := &scriptedProvider{steps: []model.Message{{Role: model.RoleAssistant, Content: "ok"}}}
+	ag := New(prov, reg, nil, nil)
+	ag.SetContextProvider(func() string { return "CTX-DINAMICO" })
+
+	if _, err := ag.Run(context.Background(), "hola", Hooks{}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	seen := prov.seen[0]
+	if len(seen) < 2 {
+		t.Fatalf("historial inesperado: %+v", seen)
+	}
+	if seen[0].Role != model.RoleSystem || !strings.Contains(seen[0].Content, "CTX-DINAMICO") {
+		t.Fatalf("falta el contexto como RoleSystem: %+v", seen[0])
+	}
+	if seen[1].Role != model.RoleUser || seen[1].Content != "hola" {
+		t.Fatalf("el mensaje del usuario debía ir después: %+v", seen[1])
+	}
+	if strings.Contains(prov.systems[0], "CTX-DINAMICO") {
+		t.Fatal("el contexto no debe ir en el system prompt (rompería el caché)")
+	}
+}
+
+// Un mensaje encolado a mitad de turno (precedido por RoleTool) no abre una
+// ronda nueva: no debe provocar que se descarte el inicio del turno en curso.
+func TestCompactHistoryQueuedInputDoesNotStartRound(t *testing.T) {
+	big := strings.Repeat("q", 8000)
+	msgs := []model.Message{
+		{Role: model.RoleUser, Content: "tarea"},
+		{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{{ID: "c1", Name: "read_file"}}},
+		{Role: model.RoleTool, ToolResults: []model.ToolResult{{CallID: "c1", Content: big}}},
+		{Role: model.RoleUser, Content: "mensaje encolado"},
+		{Role: model.RoleAssistant, Content: "sigo"},
+	}
+	out, dropped := compactHistory(msgs, 100)
+	if dropped != 0 || len(out) != len(msgs) {
+		t.Fatalf("el mensaje encolado no debía abrir ronda: dropped=%d len=%d", dropped, len(out))
 	}
 }

@@ -24,3 +24,23 @@ func TestCaptureStoresAndTruncates(t *testing.T) {
 		t.Fatalf("debe avisar del truncado: %q", got)
 	}
 }
+
+func TestTailCaptureKeepsEnd(t *testing.T) {
+	c := NewTailCapture(5)
+	if _, err := c.Write([]byte("abc")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Write([]byte("defgh")); err != nil { // excede el tope
+		t.Fatal(err)
+	}
+	got := c.String()
+	if !strings.Contains(got, "defgh") {
+		t.Fatalf("debía conservar la cola: %q", got)
+	}
+	if strings.Contains(got, "abcde") {
+		t.Fatalf("no debía conservar la cabeza: %q", got)
+	}
+	if !strings.Contains(got, "omitted") {
+		t.Fatalf("debía avisar del truncado: %q", got)
+	}
+}

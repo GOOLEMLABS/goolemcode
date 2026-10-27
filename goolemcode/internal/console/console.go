@@ -42,10 +42,16 @@ type Capture struct {
 	buf      bytes.Buffer
 	max      int
 	overflow bool
+	tail     bool
+	dropped  int
 }
 
-// NewCapture crea un Capture que acumula como máximo maxBytes.
+// NewCapture crea un Capture que acumula los PRIMEROS maxBytes.
 func NewCapture(max int) *Capture { return &Capture{max: max} }
+
+// NewTailCapture crea un Capture que acumula los ÚLTIMOS maxBytes. Es lo
+// adecuado para logs de comandos: los errores relevantes suelen estar al final.
+func NewTailCapture(max int) *Capture { return &Capture{max: max, tail: true} }
 
 func (c *Capture) Write(p []byte) (int, error) {
 	// En vivo primero (fuera de c.mu, ya que Print toma su propio candado).
@@ -53,6 +59,18 @@ func (c *Capture) Write(p []byte) (int, error) {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.tail {
+		data := make([]byte, 0, c.buf.Len()+len(p))
+		data = append(data, c.buf.Bytes()...)
+		data = append(data, p...)
+		if len(data) > c.max {
+			c.dropped += len(data) - c.max
+			data = data[len(data)-c.max:]
+		}
+		c.buf.Reset()
+		c.buf.Write(data)
+		return len(p), nil
+	}
 	if !c.overflow {
 		if room := c.max - c.buf.Len(); room <= 0 {
 			c.overflow = true
@@ -71,6 +89,12 @@ func (c *Capture) String() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	s := c.buf.String()
+	if c.tail {
+		if c.dropped > 0 {
+			s = fmt.Sprintf("… (%d bytes omitted; showing the tail)\n", c.dropped) + s
+		}
+		return s
+	}
 	if c.overflow {
 		s += "\n… (truncado)"
 	}

@@ -264,12 +264,13 @@ func RegisterLocal(reg *Registry, ws *Workspace) {
 		defer cancel()
 		cmd := proc.Command(cmdCtx, "sh", "-c", str(args["command"]))
 		cmd.Dir = ws.Root()
-		// Salida en vivo (se ve el progreso mientras corre) + captura acotada.
-		cap := console.NewCapture(maxOutput)
+		// Salida en vivo (se ve el progreso mientras corre) + captura de la COLA:
+		// en un fallo de tests/build lo relevante (resumen de errores) está al final.
+		cap := console.NewTailCapture(cmdCaptureBytes)
 		cmd.Stdout = cap
 		cmd.Stderr = cap
 		err := cmd.Run()
-		s := cap.String()
+		s := truncateTail(cap.String(), cmdMaxLines, cmdMaxBytes)
 		if cmdCtx.Err() == context.DeadlineExceeded {
 			return fmt.Sprintf("$ %s\nAborted: exceeded timeout of %ds.\n%s", str(args["command"]), timeout, s), nil
 		}
@@ -394,57 +395,19 @@ func RegisterLocal(reg *Registry, ws *Workspace) {
 			"new_content": prop("string", "New content for those lines"),
 		}, "path", "line_start", "line_end", "new_content"),
 		Mutating: true,
-	}, func(_ context.Context, args map[string]any) (string, error) {
-		p, err := safeJoin(ws.Root(), str(args["path"]))
-		if err != nil {
-			return "", err
-		}
-		start, ok1 := toInt(args["line_start"])
-		end, ok2 := toInt(args["line_end"])
-		if !ok1 || !ok2 || start < 1 || end < start {
-			return "", fmt.Errorf("line_start and line_end must be positive integers, start <= end")
-		}
-		content := str(args["new_content"])
+	}, editLinesFunc(ws))
 
-		data, err := os.ReadFile(p)
-		if err != nil {
-			return "does not exist or cannot be read: " + str(args["path"]), nil
-		}
-		lines := strings.Split(string(data), "\n")
-		total := len(lines)
-		if start > total {
-			return "", fmt.Errorf("line_start %d > file has %d lines", start, total)
-		}
-		if end > total {
-			end = total
-		}
-
-		var sb strings.Builder
-		for i, line := range lines {
-			if i+1 >= start && i+1 <= end {
-				if i+1 == start {
-					sb.WriteString(content)
-					if !strings.HasSuffix(content, "\n") {
-						sb.WriteString("\n")
-					}
-				}
-			} else {
-				sb.WriteString(line)
-				if i < total-1 {
-					sb.WriteString("\n")
-				}
-			}
-		}
-
-		tmp := fmt.Sprintf("%s.%d.tmp", p, os.Getpid())
-		if err := os.WriteFile(tmp, []byte(sb.String()), 0o644); err != nil {
-			return "", err
-		}
-		if err := os.Rename(tmp, p); err != nil {
-			return "", err
-		}
-		return fmt.Sprintf("Replaced lines %d-%d in %s (%d lines total)", start, end, str(args["path"]), total), nil
-	})
+	reg.Register(model.ToolDefinition{
+		Name:        "edit_line",
+		Description: "Alias for edit_lines. Replace specific line range in a file with new content.",
+		InputSchema: obj(map[string]any{
+			"path":        prop("string", "File path (relative or absolute)"),
+			"line_start":  prop("integer", "First line to replace (1-indexed)"),
+			"line_end":    prop("integer", "Last line to replace (inclusive)"),
+			"new_content": prop("string", "New content for those lines"),
+		}, "path", "line_start", "line_end", "new_content"),
+		Mutating: true,
+	}, editLinesFunc(ws))
 }
 
 // safeJoin resolves a path for file tools. An ABSOLUTE path is accepted as-is
@@ -514,4 +477,58 @@ func isBinary(p string) bool {
 		n = 512
 	}
 	return bytes.IndexByte(data[:n], 0) >= 0
+}
+
+func editLinesFunc(ws *Workspace) func(context.Context, map[string]any) (string, error) {
+	return func(_ context.Context, args map[string]any) (string, error) {
+		p, err := safeJoin(ws.Root(), str(args["path"]))
+		if err != nil {
+			return "", err
+		}
+		start, ok1 := toInt(args["line_start"])
+		end, ok2 := toInt(args["line_end"])
+		if !ok1 || !ok2 || start < 1 || end < start {
+			return "", fmt.Errorf("line_start and line_end must be positive integers, start <= end")
+		}
+		content := str(args["new_content"])
+
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return "does not exist or cannot be read: " + str(args["path"]), nil
+		}
+		lines := strings.Split(string(data), "\n")
+		total := len(lines)
+		if start > total {
+			return "", fmt.Errorf("line_start %d > file has %d lines", start, total)
+		}
+		if end > total {
+			end = total
+		}
+
+		var sb strings.Builder
+		for i, line := range lines {
+			if i+1 >= start && i+1 <= end {
+				if i+1 == start {
+					sb.WriteString(content)
+					if !strings.HasSuffix(content, "\n") {
+						sb.WriteString("\n")
+					}
+				}
+			} else {
+				sb.WriteString(line)
+				if i < total-1 {
+					sb.WriteString("\n")
+				}
+			}
+		}
+
+		tmp := fmt.Sprintf("%s.%d.tmp", p, os.Getpid())
+		if err := os.WriteFile(tmp, []byte(sb.String()), 0o644); err != nil {
+			return "", err
+		}
+		if err := os.Rename(tmp, p); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Replaced lines %d-%d in %s (%d lines total)", start, end, str(args["path"]), total), nil
+	}
 }

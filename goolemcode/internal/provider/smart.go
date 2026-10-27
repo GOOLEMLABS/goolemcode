@@ -76,6 +76,18 @@ func (s *SmartRouter) IsSecondaryLabel(label string) bool {
 	return label != "" && label == s.secondary.Label()
 }
 
+// TrimHistory delega en los proveedores que implementan HistoryTrimmer. Cada
+// uno solo toca sus propios bloques crudos, así que aplicarlos en orden es seguro.
+func (s *SmartRouter) TrimHistory(messages []model.Message, keepFrom int) []model.Message {
+	if t, ok := s.primary.(HistoryTrimmer); ok {
+		messages = t.TrimHistory(messages, keepFrom)
+	}
+	if t, ok := s.secondary.(HistoryTrimmer); ok {
+		messages = t.TrimHistory(messages, keepFrom)
+	}
+	return messages
+}
+
 func (s *SmartRouter) Chat(ctx context.Context, messages []model.Message, tools []model.ToolDefinition, system string, onDelta, onThinking DeltaFunc) (model.Message, error) {
 	chosen := s.pickModel(messages)
 	degraded := false
