@@ -271,3 +271,43 @@ func TestCompactHistoryQueuedInputDoesNotStartRound(t *testing.T) {
 		t.Fatalf("el mensaje encolado no debía abrir ronda: dropped=%d len=%d", dropped, len(out))
 	}
 }
+
+// El contexto dinámico (p. ej. un CLAUDE.md grande) no debe consumir el
+// presupuesto intra-turno: si lo hiciera, cada resultado de tool se resumiría al
+// instante y el modelo lo releería en bucle hasta agotar los pasos.
+func TestAgentLargeContextDoesNotForceIntraTurnPruning(t *testing.T) {
+	reg := tools.NewRegistry()
+	blob := strings.Repeat("r", 4000) // ~1000 tokens
+	reg.Register(model.ToolDefinition{Name: "blob", Description: "x", InputSchema: map[string]any{"type": "object"}},
+		func(context.Context, map[string]any) (string, error) { return blob, nil })
+
+	var steps []model.Message
+	for i := 0; i < 5; i++ { // 5 resultados ≈ 5000 tokens: caben en 16000
+		steps = append(steps, model.Message{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{{
+			ID: "c" + string(rune('0'+i)), Name: "blob", Arguments: map[string]any{},
+		}}})
+	}
+	steps = append(steps, model.Message{Role: model.RoleAssistant, Content: "final"})
+	prov := &scriptedProvider{steps: steps}
+	ag := New(prov, reg, nil, nil)
+	// ~12 000 tokens de contexto: si contara, 12000+5000 > 16000 y el contexto
+	// agotaría el presupuesto desde el principio.
+	ag.SetContextProvider(func() string { return strings.Repeat("c", 48*1024) })
+
+	if _, err := ag.Run(context.Background(), "tarea", Hooks{}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	seen := prov.seen[5] // ya incluye los 5 resultados
+	if len(seen) == 0 {
+		t.Fatal("sin mensajes")
+	}
+	// El PRIMER resultado solo se resumiría si el contexto consumiera el
+	// presupuesto (con keepRecentToolResults=3 se conservan los últimos 3).
+	for _, m := range seen {
+		for _, tr := range m.ToolResults {
+			if tr.CallID == "c0" && tr.Content != blob {
+				t.Fatalf("el primer resultado no debía resumirse por culpa del contexto: %q", tr.Content[:60])
+			}
+		}
+	}
+}

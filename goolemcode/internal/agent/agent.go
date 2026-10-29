@@ -176,6 +176,12 @@ func (a *Agent) RunWithImages(ctx context.Context, input string, images []model.
 		}
 	}
 	a.messages = append(a.messages, model.Message{Role: model.RoleUser, Content: input, Images: images})
+	// workStart marca el inicio del trabajo del turno (assistant/tool). El
+	// contexto dinámico y el mensaje del usuario NO cuentan para el presupuesto
+	// intra-turno: no son podables y, si son grandes (p. ej. un CLAUDE.md de
+	// 48 KB), dejarían el presupuesto agotado desde el primer paso y harían que
+	// cada resultado de tool se resumiera al instante (el modelo lo relee).
+	workStart := len(a.messages)
 	a.turnUsage = model.Usage{}
 	last := ""
 	for step := 0; step < a.maxSteps; step++ {
@@ -196,7 +202,7 @@ func (a *Agent) RunWithImages(ctx context.Context, input string, images []model.
 		if tr, ok := a.prov.(provider.HistoryTrimmer); ok {
 			a.messages = tr.TrimHistory(a.messages, turnStart)
 		}
-		if pruned, n := pruneTurn(a.messages, turnStart, a.turnBudget); n > 0 {
+		if pruned, n := pruneTurn(a.messages, workStart, a.turnBudget); n > 0 {
 			a.messages = pruned
 			debug.Logf("agent step %d: intra-turn pruning summarised/shrunk %d item(s)", step, n)
 		}
@@ -206,6 +212,10 @@ func (a *Agent) RunWithImages(ctx context.Context, input string, images []model.
 			turnStart -= removed
 			if turnStart < 0 {
 				turnStart = 0
+			}
+			workStart -= removed
+			if workStart < 0 {
+				workStart = 0
 			}
 			if h.OnDelta != nil {
 				h.OnDelta(fmt.Sprintf("\n[contexto: descartadas %d rondas antiguas para no exceder la ventana]\n", dropped))
@@ -261,7 +271,13 @@ func (a *Agent) RunWithImages(ctx context.Context, input string, images []model.
 		}
 		a.messages = append(a.messages, model.Message{Role: model.RoleTool, ToolResults: results})
 	}
-	return last + "\n\n[Se alcanzó el máximo de pasos]", nil
+	// Avisa también por el stream: main descarta el valor de retorno, así que
+	// sin esto el turno terminaba en silencio tras agotar los pasos.
+	const maxStepsNotice = "\n\n[Se alcanzó el máximo de pasos]"
+	if h.OnDelta != nil {
+		h.OnDelta(maxStepsNotice)
+	}
+	return last + maxStepsNotice, nil
 }
 
 func (a *Agent) runTool(ctx context.Context, call model.ToolCall) model.ToolResult {
